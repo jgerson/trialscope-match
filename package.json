@@ -1,12 +1,13 @@
 {
-  "name": "trialscope-web",
+  "name": "trialscope-match",
   "version": "0.1.0",
-  "description": "TrialScope web: patient notes, PubMed and clinical trials search on turbopuffer (personal learning project)",
+  "description": "TrialScope Match: patient records in Supabase Postgres, PubMed and clinical trials search on turbopuffer (personal learning project)",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "setup-db": "node scripts/setup-db.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.6.0",
@@ -24,6 +25,7 @@
     "leaflet": "^1.9.4",
     "lucide-react": "^1.70.0",
     "next": "^16.4.5",
+    "postgres": "^3.4.9",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
