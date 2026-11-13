@@ -15,7 +15,10 @@ export function db(): postgres.Sql {
   _sql ??= postgres(config.databaseUrl, {
     prepare: false,
     max: 5,
-    idle_timeout: 20,
+    // Opening a connection (TCP, SSL and auth at the pooler) costs about 100 ms, while a query on an open one takes
+    // about 5 ms. Keep idle connections for 5 minutes so a page load after a pause doesn't reconnect; Supavisor holds
+    // idle client connections cheaply.
+    idle_timeout: 300,
     connect_timeout: 10,
     // Supabase can require SSL for every role, and the URL setup-db prints has no sslmode, so ask for it here
     // (PGSSL=off for a local Postgres without SSL, as in setup-db).
