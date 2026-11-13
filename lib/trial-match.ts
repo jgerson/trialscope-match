@@ -25,6 +25,7 @@ export type RuleStatus = "met" | "failed" | "unknown";
 
 export type Rule = { section: "inclusion" | "exclusion"; criterion: string } & (
   | { kind: "diagnosis"; any: string[] }
+  | { kind: "specialty"; value: "Oncology" | "Cardiology" }
   | { kind: "stage"; any: string[] }
   | { kind: "biomarker"; name: string; result?: string }
   | { kind: "medication"; text: string; when: "current" | "ever" | "never" }
@@ -53,13 +54,14 @@ export interface TrialMatch {
   sql: { ms: number; statement: string };
 }
 
-const VERSION = 1; // bump when the prompt or the rule shapes change, so cached rules are extracted again
+const VERSION = 2; // bump when the prompt or the rule shapes change, so cached rules are extracted again
 const MAX_RULES = 16;
 
 /** A short label for a rule, as its chip shows it. */
 export function ruleLabel(r: Rule): string {
   switch (r.kind) {
     case "diagnosis": return r.any.join(" or ");
+    case "specialty": return r.value === "Oncology" ? "Any cancer" : "Any heart condition";
     case "stage": return `Stage ${r.any.join("/")}`;
     case "biomarker": return r.result ? `${r.name} ${r.result}` : `${r.name} result`;
     case "medication": return `${r.when === "current" ? "On" : r.when === "ever" ? "Prior" : "No"} ${r.text}`;
@@ -99,6 +101,8 @@ a result; medications by name and drug class, current or stopped; lab results by
 ${vocab}
 
 Rule kinds (report through the tool):
+- specialty: "Oncology" (any cancer) or "Cardiology" (any heart condition). Use it when the trial accepts any cancer, \
+or any heart condition, rather than a named one; every patient record belongs to exactly one specialty.
 - diagnosis: the patient has an active condition whose name contains any of these words, e.g. ["non-small cell lung"].
 - stage: the primary diagnosis's stage starts with any of these Roman numerals, e.g. ["III", "IV"].
 - biomarker: the patient's latest result for this biomarker name contains this result text, e.g. name "ALK", result \
@@ -112,6 +116,8 @@ can't, make it not checkable.
 
 Rules:
 - Use only names that appear in the record vocabulary above where one fits; plain words otherwise.
+- Every trial needs a disease rule: a diagnosis rule for a named disease, or a specialty rule when any cancer (or any \
+heart condition) qualifies. If the criteria text doesn't name the disease, take it from the trial's listed conditions.
 - Write exclusion criteria as what the patient must satisfy, with section "exclusion": "prior lorlatinib" becomes \
 medication never lorlatinib.
 - Only make a rule when the criterion clearly maps to one kind. Everything else (consent, life expectancy, ability to \
@@ -131,7 +137,7 @@ const TOOL: Anthropic.Tool = {
         items: {
           type: "object",
           properties: {
-            kind: { type: "string", enum: ["diagnosis", "stage", "biomarker", "medication", "lab", "ecog", "no_condition"] },
+            kind: { type: "string", enum: ["specialty", "diagnosis", "stage", "biomarker", "medication", "lab", "ecog", "no_condition"] },
             section: { type: "string", enum: ["inclusion", "exclusion"] },
             criterion: { type: "string" },
             any: { type: "array", items: { type: "string" }, description: "diagnosis words or stage numerals" },
@@ -142,6 +148,7 @@ const TOOL: Anthropic.Tool = {
             op: { type: "string", enum: [">=", "<="] },
             value: { type: "number" },
             max: { type: "number" },
+            specialty: { type: "string", enum: ["Oncology", "Cardiology"] },
           },
           required: ["kind", "section", "criterion"],
         },
@@ -160,7 +167,9 @@ function cleanRules(raw: unknown): Rule[] {
   for (const r of raw.slice(0, MAX_RULES) as Record<string, unknown>[]) {
     const base = { section: r.section === "exclusion" ? "exclusion" as const : "inclusion" as const, criterion: s(r.criterion) || "From the criteria" };
     const any = Array.isArray(r.any) ? (r.any as unknown[]).map(s).filter(Boolean).slice(0, 6) : [];
-    if (r.kind === "diagnosis" && any.length) out.push({ ...base, kind: "diagnosis", any });
+    if (r.kind === "specialty" && (r.specialty === "Oncology" || r.specialty === "Cardiology"))
+      out.push({ ...base, kind: "specialty", value: r.specialty });
+    else if (r.kind === "diagnosis" && any.length) out.push({ ...base, kind: "diagnosis", any });
     else if (r.kind === "stage" && any.length) {
       const stages = [...new Set(any.map((x) => x.toUpperCase().match(/^(IV|III|II|I)/)?.[1]).filter(Boolean) as string[])];
       if (stages.length) out.push({ ...base, kind: "stage", any: stages });
@@ -189,7 +198,8 @@ async function vocabulary(): Promise<string> {
 /** The trial's rules: from the cache when the criteria haven't changed, otherwise from one model call. */
 export async function getRules(trial: Trial): Promise<TrialRules> {
   const t0 = performance.now();
-  const hash = createHash("sha256").update(JSON.stringify([VERSION, trial.criteria, trial.minAge, trial.maxAge, trial.sex])).digest("hex");
+  const hash = createHash("sha256")
+    .update(JSON.stringify([VERSION, trial.criteria, trial.conditions, trial.minAge, trial.maxAge, trial.sex])).digest("hex");
   const sql = db();
   const [hit] = await sql<{ rules: Rule[]; not_checkable: string[]; model: string; in_tokens: number | null; out_tokens: number | null }[]>`
     select rules, not_checkable, model, in_tokens, out_tokens from trial_rules where nct = ${trial.nct} and criteria_hash = ${hash}`;
@@ -207,7 +217,8 @@ export async function getRules(trial: Trial): Promise<TrialRules> {
     system: SYSTEM(await vocabulary()),
     tools: [TOOL],
     tool_choice: { type: "tool", name: TOOL.name },
-    messages: [{ role: "user", content: `<trial id="${trial.nct}">\n${trial.title}\n\n${trial.criteria}\n</trial>` }],
+    messages: [{ role: "user", content: `<trial id="${trial.nct}">\n${trial.title}\n` +
+      `Listed conditions: ${trial.conditions.join("; ") || "none"}\n\n${trial.criteria}\n</trial>` }],
   }, { nct: trial.nct });
   const call = msg.content.find((b) => b.type === "tool_use");
   const input = (call?.type === "tool_use" ? call.input : {}) as { rules?: unknown; not_checkable?: unknown };
@@ -274,6 +285,8 @@ function lateral(sql: postgres.Sql, r: Rule): postgres.PendingQuery<postgres.Row
     case "no_condition":
       return sql`select case when count(*) = 0 then 'met' else 'failed' end as status, string_agg(c.description, '; ') as ev
         from conditions c where c.patient_id = p.id and c.status = 'active' and c.description ilike ${like(r.text)}`;
+    case "specialty":
+      return sql`select case when p.specialty = ${r.value} then 'met' else 'failed' end as status, p.specialty as ev`;
     case "age": {
       const age = sql`extract(year from age(p.date_of_birth))::int`;
       return sql`select case when ${age} >= ${r.min ?? 0} and ${age} <= ${r.max ?? 200} then 'met' else 'failed' end as status,

@@ -78,6 +78,14 @@ export function TrialPatients({ nct }: { nct: string }) {
             <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-paper p-2.5 font-mono text-[11px] leading-relaxed text-ink-2 ring-1 ring-line">{data.sql.statement}</pre>
           )}
 
+          {thin(data) && (
+            <p className="mt-2 rounded-lg bg-paper px-3 py-2 text-[12.5px] text-ink-2 ring-1 ring-line">
+              {thin(data) === "none"
+                ? "None of this trial's criteria can be checked against the record beyond age and sex, so everyone in that range is listed. Treat this list as unscreened."
+                : "Only the disease and basic limits could be checked; most of this trial's criteria need the full record or the protocol. Treat these as broad candidates."}
+            </p>
+          )}
+
           {!data.candidates.length ? (
             <p className="mt-3 text-[13px] text-slate">No patient meets every checkable rule. The closest are listed under excluded.</p>
           ) : (
@@ -156,6 +164,17 @@ export function TrialPatients({ nct }: { nct: string }) {
       )}
     </section>
   );
+}
+
+/**
+ * "none" when no rule came from the criteria text (only age and sex), "broad" when the only ones are about the disease
+ * itself (specialty, diagnosis, stage), so the list is barely screened. Null otherwise.
+ */
+function thin(data: Result): "none" | "broad" | null {
+  const fromCriteria = data.rules.rules.filter((r) => r.kind !== "age" && r.kind !== "sex");
+  if (!fromCriteria.length) return "none";
+  if (fromCriteria.every((r) => r.kind === "specialty" || r.kind === "diagnosis" || r.kind === "stage")) return "broad";
+  return null;
 }
 
 function Chips({ data, results, only }: { data: Result; results: Result["candidates"][number]["results"]; only?: RuleStatus }) {
