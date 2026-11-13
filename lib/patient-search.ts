@@ -106,7 +106,7 @@ function evidence(sql: postgres.Sql, f: AttrFilter): postgres.PendingQuery<postg
     case "lab":
       return sql`(select string_agg(o.name || ' ' || o.value::text || ' ' || o.unit || ' (' || o.observed_on::text || ')', '; ')
         from (select distinct on (name) name, value::float8 as value, unit, observed_on from observations
-              where patient_id = p.id and kind = 'lab' and name ilike ${f.name} order by name, observed_on desc, id desc) o
+              where patient_id = p.id and kind = 'lab' and lower(name) = lower(${f.name}) order by name, observed_on desc, id desc) o
         where ${f.op === ">=" ? sql`o.value >= ${f.value}` : sql`o.value <= ${f.value}`})`;
     case "age": {
       const age = sql`extract(year from age(p.date_of_birth))::int`;

@@ -4,7 +4,7 @@ import { flushLangfuse, newTrace } from "@/lib/langfuse";
 import { randomUUID } from "node:crypto";
 import { config } from "@/lib/config";
 import { indexNotes } from "@/lib/note-index";
-import { getPatient, saveNote } from "@/lib/patients";
+import { getPatient, noteAuthor, saveNote } from "@/lib/patients";
 import { displayName, requireUserId } from "@/lib/session";
 import type { Note } from "@/lib/types";
 
@@ -16,14 +16,17 @@ export async function POST(req: Request) {
   if (config.readOnly) return NextResponse.json({ error: "Editing is turned off on this deployment." }, { status: 403 });
   const { patientId, note } = (await req.json()) as { patientId: string; note: Partial<Note> };
   if (!(await getPatient(patientId))) return NextResponse.json({ error: "Unknown patient." }, { status: 404 });
+  // An edit must name one of this patient's existing notes; anything else is a new note with an id the server picks,
+  // so a client can't choose ids (turbopuffer limits them to 64 bytes) or claim another patient's note.
+  const existingAuthor = note.id ? await noteAuthor(String(note.id), patientId) : null;
   const clean: Note = {
-    id: note.id || `${patientId}-${randomUUID().slice(0, 8)}`,
+    id: existingAuthor != null ? String(note.id) : `${patientId}-${randomUUID().slice(0, 8)}`,
     title: (note.title ?? "").trim().slice(0, 200) || "Untitled note",
     body: (note.body ?? "").slice(0, 20000),
     note_type: note.note_type || "Visit note",
     visit_date: note.visit_date || new Date().toISOString().slice(0, 10),
-    // A new note is credited to whoever is signed in. An edit keeps the note's original author.
-    author: note.id ? note.author || (await displayName()) : await displayName(),
+    // A new note is credited to whoever is signed in. An edit keeps the author stored in Postgres, not one the client sends.
+    author: existingAuthor ?? (await displayName()),
   };
   // One Langfuse trace per save (tagged "notes"): the read of the previous version and the insert or update in Postgres.
   after(flushLangfuse);

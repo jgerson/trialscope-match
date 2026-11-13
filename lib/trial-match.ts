@@ -159,23 +159,38 @@ const TOOL: Anthropic.Tool = {
   },
 };
 
-/** Keep only well-formed rules from the model's output. */
+/**
+ * Keep only well-formed rules, from the model's output or from the cache (rows in trial_rules are re-checked on every
+ * read, so a bad or edited row can't change who is listed).
+ *
+ * Every rule must read as something the patient must satisfy. An exclusion the model wrote the inclusion way round is
+ * flipped where it can be (an excluded diagnosis becomes "no condition", an excluded current or prior drug becomes
+ * "never on") and dropped where it can't (an excluded stage, specialty or biomarker has no "must not" form here).
+ */
 function cleanRules(raw: unknown): Rule[] {
   if (!Array.isArray(raw)) return [];
   const s = (v: unknown) => (typeof v === "string" ? v.trim().slice(0, 80) : "");
   const out: Rule[] = [];
   for (const r of raw.slice(0, MAX_RULES) as Record<string, unknown>[]) {
-    const base = { section: r.section === "exclusion" ? "exclusion" as const : "inclusion" as const, criterion: s(r.criterion) || "From the criteria" };
+    if (!r || typeof r !== "object") continue;
+    const exclusion = r.section === "exclusion";
+    const base = { section: exclusion ? "exclusion" as const : "inclusion" as const, criterion: s(r.criterion) || "From the criteria" };
     const any = Array.isArray(r.any) ? (r.any as unknown[]).map(s).filter(Boolean).slice(0, 6) : [];
-    if (r.kind === "specialty" && (r.specialty === "Oncology" || r.specialty === "Cardiology"))
-      out.push({ ...base, kind: "specialty", value: r.specialty });
+    const specialty = r.specialty ?? r.value; // the model sends `specialty`; cached rules store `value`
+    if (exclusion && ["specialty", "stage", "biomarker"].includes(String(r.kind))) continue;
+    if (exclusion && r.kind === "diagnosis") {
+      for (const text of any) out.push({ ...base, kind: "no_condition", text });
+      continue;
+    }
+    if (r.kind === "specialty" && (specialty === "Oncology" || specialty === "Cardiology"))
+      out.push({ ...base, kind: "specialty", value: specialty });
     else if (r.kind === "diagnosis" && any.length) out.push({ ...base, kind: "diagnosis", any });
     else if (r.kind === "stage" && any.length) {
       const stages = [...new Set(any.map((x) => x.toUpperCase().match(/^(IV|III|II|I)/)?.[1]).filter(Boolean) as string[])];
       if (stages.length) out.push({ ...base, kind: "stage", any: stages });
     } else if (r.kind === "biomarker" && s(r.name)) out.push({ ...base, kind: "biomarker", name: s(r.name), ...(s(r.result) ? { result: s(r.result) } : {}) });
     else if (r.kind === "medication" && s(r.text) && ["current", "ever", "never"].includes(String(r.when)))
-      out.push({ ...base, kind: "medication", text: s(r.text), when: r.when as "current" });
+      out.push({ ...base, kind: "medication", text: s(r.text), when: exclusion ? "never" : (r.when as "current") });
     else if (r.kind === "lab" && s(r.name) && (r.op === ">=" || r.op === "<=") && typeof r.value === "number" && Number.isFinite(r.value))
       out.push({ ...base, kind: "lab", name: s(r.name), op: r.op, value: r.value });
     else if (r.kind === "ecog" && typeof r.max === "number" && r.max >= 0 && r.max <= 5) out.push({ ...base, kind: "ecog", max: Math.round(r.max) });
@@ -204,7 +219,8 @@ export async function getRules(trial: Trial): Promise<TrialRules> {
   const [hit] = await sql<{ rules: Rule[]; not_checkable: string[]; model: string; in_tokens: number | null; out_tokens: number | null }[]>`
     select rules, not_checkable, model, in_tokens, out_tokens from trial_rules where nct = ${trial.nct} and criteria_hash = ${hash}`;
   if (hit) {
-    return { nct: trial.nct, rules: [...structuralRules(trial), ...hit.rules], notCheckable: hit.not_checkable, model: hit.model,
+    const notCheckable = Array.isArray(hit.not_checkable) ? hit.not_checkable.map((x) => String(x).slice(0, 120)).slice(0, 20) : [];
+    return { nct: trial.nct, rules: [...structuralRules(trial), ...cleanRules(hit.rules)], notCheckable, model: String(hit.model),
       cached: true, ms: Math.round(performance.now() - t0), inTokens: hit.in_tokens, outTokens: hit.out_tokens };
   }
   if (!trial.criteria.trim()) {
@@ -213,7 +229,7 @@ export async function getRules(trial: Trial): Promise<TrialRules> {
   const llm = await copilotClient();
   const msg = await tracedCreate("extract-trial-rules", llm, {
     model: config.copilotModel,
-    max_tokens: 3000,
+    max_tokens: 4000,
     system: SYSTEM(await vocabulary()),
     tools: [TOOL],
     tool_choice: { type: "tool", name: TOOL.name },
@@ -221,7 +237,13 @@ export async function getRules(trial: Trial): Promise<TrialRules> {
       `Listed conditions: ${trial.conditions.join("; ") || "none"}\n\n${trial.criteria}\n</trial>` }],
   }, { nct: trial.nct });
   const call = msg.content.find((b) => b.type === "tool_use");
-  const input = (call?.type === "tool_use" ? call.input : {}) as { rules?: unknown; not_checkable?: unknown };
+  // A missing or cut-off answer isn't "no rules": report it and cache nothing, so the next view tries again.
+  if (call?.type !== "tool_use" || msg.stop_reason === "max_tokens") {
+    throw new Error(msg.stop_reason === "max_tokens"
+      ? "The model's answer was cut off before it finished the rules. Reload to try again."
+      : "The model didn't return any rules. Reload to try again.");
+  }
+  const input = call.input as { rules?: unknown; not_checkable?: unknown };
   const rules = cleanRules(input.rules);
   const notCheckable = Array.isArray(input.not_checkable)
     ? (input.not_checkable as unknown[]).map((x) => String(x).trim().slice(0, 120)).filter(Boolean).slice(0, 20) : [];
@@ -249,7 +271,8 @@ function lateral(sql: postgres.Sql, r: Rule): postgres.PendingQuery<postgres.Row
             (select description from conditions where patient_id = p.id and is_primary and status = 'active' limit 1)) as ev
         from conditions c where c.patient_id = p.id and c.status = 'active' and c.description ilike any(${r.any.map(like)}::text[])`;
     case "stage":
-      return sql`select case when max(c.stage) is null or max(c.stage) = '' then 'unknown'
+      // A stage that isn't a Roman numeral (NYHA II, Post-MI, Paroxysmal) says nothing about this rule: unknown.
+      return sql`select case when substring(upper(coalesce(max(c.stage), '')) from '^(IV|III|II|I)') is null then 'unknown'
             when substring(upper(max(c.stage)) from '^(IV|III|II|I)') = any(${r.any}::text[]) then 'met' else 'failed' end as status,
           nullif('stage ' || coalesce(max(c.stage), ''), 'stage ') as ev
         from conditions c where c.patient_id = p.id and c.is_primary and c.status = 'active'`;
@@ -277,7 +300,7 @@ function lateral(sql: postgres.Sql, r: Rule): postgres.PendingQuery<postgres.Row
       return sql`select case when count(*) = 0 then 'unknown' when bool_and(${ok}) then 'met' else 'failed' end as status,
           string_agg(o.name || ' ' || o.value::text || ' ' || o.unit || ' (' || o.observed_on::text || ')', '; ') as ev
         from (select distinct on (name) name, value::float8 as value, unit, observed_on from observations
-              where patient_id = p.id and kind = 'lab' and name ilike ${r.name} order by name, observed_on desc, id desc) o`;
+              where patient_id = p.id and kind = 'lab' and lower(name) = lower(${r.name}) order by name, observed_on desc, id desc) o`;
     }
     case "ecog":
       return sql`select case when p.ecog is null then 'unknown' when p.ecog <= ${r.max} then 'met' else 'failed' end as status,

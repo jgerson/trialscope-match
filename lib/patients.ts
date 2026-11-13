@@ -84,6 +84,13 @@ export async function listNotes(patientId: string, log?: QueryTiming[]): Promise
   return [...rows];
 }
 
+/** The stored author of one of this patient's notes, or null when the patient has no note with that id. */
+export async function noteAuthor(id: string, patientId: string): Promise<string | null> {
+  const rows = await timed("read-note-author", () => db()<{ author: string }[]>`
+    select author from notes where id = ${id} and patient_id = ${patientId}`);
+  return rows[0]?.author ?? null;
+}
+
 /** Insert or update one note and report what happened, for the "What the save did" panel. */
 export async function saveNote(patientId: string, note: Note): Promise<WriteReport & { id: string }> {
   const sql = db();

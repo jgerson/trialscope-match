@@ -124,9 +124,9 @@ export function SaveDetails({ report, note, index }: { report: WriteReport; note
           {report.sql}
         </pre>
         <p className="mt-2 text-[12px] leading-relaxed text-slate">
-          Parameters are sent separately from the statement, so note text is never part of the SQL. Notes aren&apos;t
-          indexed for search in this app: the copilot and the eligibility check read them straight from this table, so
-          the new version is what they see on their next read.
+          Parameters are sent separately from the statement, so note text is never part of the SQL. The copilot and the
+          eligibility check read notes straight from this table, so they see the new version on their next read; search
+          across patients sees it once it&apos;s indexed (above).
         </p>
       </Section>
     </div>

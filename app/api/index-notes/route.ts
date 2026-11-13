@@ -1,7 +1,7 @@
 // The notes-sync sweep: indexes every note still waiting (new, edited, or failed after a save) into turbopuffer.
 // Called once a minute by Supabase's pg_cron through pg_net (see scripts/setup-index-cron.mjs), with
 // Authorization: Bearer $INDEX_NOTES_SECRET. It's outside Clerk sign-in (proxy.ts), so the secret is the only way in.
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { config } from "@/lib/config";
 import { indexNotes } from "@/lib/note-index";
@@ -12,11 +12,15 @@ export const maxDuration = 60;
 // Five batches of 100 per call is far more than a minute's edits; a large backfill finishes over a few calls.
 const MAX_BATCHES = 5;
 
+// Compare SHA-256 digests: always 32 bytes each, so the comparison can't throw on odd input (a non-ASCII header is a
+// different byte length than its character count) and the time taken doesn't reveal the secret's length.
+const digest = (s: string) => createHash("sha256").update(s, "utf8").digest();
+
 function authorized(req: Request): boolean {
   const secret = config.indexNotesSecret;
+  if (!secret) return false;
   const got = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
-  if (!secret || got.length !== secret.length) return false;
-  return timingSafeEqual(Buffer.from(got), Buffer.from(secret));
+  return timingSafeEqual(digest(got), digest(secret));
 }
 
 export async function POST(req: Request) {

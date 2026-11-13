@@ -52,30 +52,50 @@ export function PatientSearch() {
   const [showAll, setShowAll] = useState(false);
   const [explain, setExplain] = useState<Hit | null>(null);
 
-  // Suggestions for the filter inputs, once, the first time a filter is added.
+  // Suggestions for the filter inputs, once, the first time a filter is added. Without them the inputs still work.
   useEffect(() => {
     if (!adding || options) return;
-    fetch("/api/patient-search").then((r) => r.json()).then(setOptions).catch(() => setOptions({ diagnoses: [], biomarkers: [], medications: [], labs: [] }));
+    const none: Options = { diagnoses: [], biomarkers: [], medications: [], labs: [] };
+    const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
+    fetch("/api/patient-search")
+      .then(async (r) => {
+        const j = r.ok ? await r.json() : {};
+        setOptions({ diagnoses: list(j.diagnoses), biomarkers: list(j.biomarkers), medications: list(j.medications), labs: list(j.labs) });
+      })
+      .catch(() => setOptions(none));
   }, [adding, options]);
 
+  // Only the latest search may set the results: a slow earlier response that arrives late is ignored.
+  const latest = useRef(0);
   const run = async (nextFilters = filters, nextMode = mode) => {
+    const id = ++latest.current;
     setBusy(true); setError(null); setShowAll(false);
     try {
       const res = await fetch("/api/patient-search", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ q, mode: nextMode, filters: nextFilters }) });
       const json = await res.json();
+      if (id !== latest.current) return;
       if (!res.ok) throw new Error(json.error ?? "Search failed.");
       setResult(json as PatientSearchResult);
     } catch (e) {
+      if (id !== latest.current) return;
       setError((e as Error).message); setResult(null);
     } finally {
-      setBusy(false);
+      if (id === latest.current) setBusy(false);
     }
   };
 
-  const canRun = mode === "notes" ? !!q.trim() : mode === "attributes" ? filters.length > 0 : !!q.trim() || filters.length > 0;
+  const runnable = (fs: AttrFilter[]) => (mode === "notes" ? !!q.trim() : mode === "attributes" ? fs.length > 0 : !!q.trim() || fs.length > 0);
+  const canRun = runnable(filters);
+  const clear = () => { latest.current++; setResult(null); setError(null); setBusy(false); };
   const addFilter = (f: AttrFilter) => { const next = [...filters, f]; setFilters(next); setAdding(false); if (result) run(next); };
-  const removeFilter = (i: number) => { const next = filters.filter((_, j) => j !== i); setFilters(next); if (result && (next.length || q.trim())) run(next); };
+  // Removing the last thing a search needs clears the results rather than leaving the old ones on screen.
+  const removeFilter = (i: number) => {
+    const next = filters.filter((_, j) => j !== i);
+    setFilters(next);
+    if (!result) return;
+    if (runnable(next)) run(next); else clear();
+  };
   const patients = result?.patients ?? [];
 
   return (
@@ -87,13 +107,13 @@ export function PatientSearch() {
             placeholder={mode === "attributes" ? "Attributes only: add filters below" : "Search all patients' notes, like “tingling in feet”"}
             aria-label="Search notes across all patients" className="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-slate/70 disabled:opacity-60" />
         </label>
-        <Segmented label="Search in" value={mode} options={MODES} onChange={(m) => { setMode(m); setResult(null); setError(null); }} />
+        <Segmented label="Search in" value={mode} options={MODES} onChange={(m) => { setMode(m); clear(); }} />
         <button type="submit" disabled={!canRun || busy}
           className="inline-flex items-center gap-1.5 rounded-lg bg-ink px-3.5 py-2 text-[13px] font-semibold text-white disabled:bg-line-2">
           {busy && <Loader2 size={14} className="animate-spin" />}Search
         </button>
         {result && (
-          <button type="button" onClick={() => { setResult(null); setError(null); }} className="px-1 text-[13px] text-slate hover:text-ink">Clear</button>
+          <button type="button" onClick={clear} className="px-1 text-[13px] text-slate hover:text-ink">Clear</button>
         )}
       </form>
 

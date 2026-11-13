@@ -1,8 +1,9 @@
 -- "Find patients for this trial": a trial's free-text eligibility criteria, turned into checkable rules by one model
 -- call (lib/trial-match.ts), cached here so the call happens once per trial rather than on every view.
 --
--- criteria_hash covers the criteria text, the trial's age and sex limits and the extraction prompt's version, so an
--- amended protocol (or a changed prompt) is extracted again instead of reusing stale rules.
+-- criteria_hash covers the criteria text, the trial's listed conditions, its age and sex limits and the extraction
+-- prompt's version, so an amended protocol (or a changed prompt) is extracted again instead of reusing stale rules.
+-- Row-level security is added in 0004.
 --
 -- Safe to run more than once (npm run migrate).
 

@@ -49,7 +49,7 @@ export function TrialPatients({ nct }: { nct: string }) {
     <section aria-labelledby="tp-h" className="mt-8 rounded-2xl border border-line bg-surface p-5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 id="tp-h" className="flex items-center gap-2 text-[16px] font-semibold text-ink"><Users size={17} />Candidate patients</h2>
-        {data && (
+        {data && !!data.labels.length && (
           <span className="text-[12.5px] text-slate">
             {data.candidates.length} possible · {data.excluded.length} excluded · {data.rules.notCheckable.length} criteria not checkable from the record
           </span>
@@ -64,7 +64,20 @@ export function TrialPatients({ nct }: { nct: string }) {
       )}
       {error && <p className="mt-3 text-[13px] text-red-700">{error}</p>}
 
-      {data && (
+      {data && !data.labels.length && (
+        <div className="mt-2 space-y-2 text-[13px] text-ink-2">
+          <p>
+            Nothing in this trial can be checked against the record: it sets no age or sex limits, and none of its
+            criteria map to a diagnosis, drug, lab or other field the record holds. Select a patient and run the
+            eligibility checklist below instead.
+          </p>
+          {!!data.rules.notCheckable.length && (
+            <p className="text-[12.5px] text-slate">Criteria read but not checkable: {data.rules.notCheckable.join(" · ")}</p>
+          )}
+        </div>
+      )}
+
+      {data && !!data.labels.length && (
         <>
           <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 font-mono text-[11.5px] text-slate">
             <span>{data.labels.length} rules, {data.rules.cached ? `cached, read in ${data.rules.ms} ms` : `extracted by the model in ${(data.rules.ms / 1000).toFixed(1)} s`}</span>
