@@ -24,7 +24,7 @@ shared corpora from turbopuffer and keeps its own patient data in Supabase.
 | --- | --- | --- |
 | **Supabase Postgres** | `patients`, `conditions`, `medications`, `observations` (labs and biomarkers), `notes` | Read, insert and update, as the `trialscope_app` role (no deletes, no schema changes) |
 | **turbopuffer** | `ts-trials` (49,400 interventional studies), `ts-pubmed` (70,990 abstracts) | Read only, enforced in `tpCall` (`lib/tpuf-log.ts`): any write, or any other namespace, is refused before a request is made |
-| **ClinicalTrials.gov** | Full trial details, criteria and sites | Read live on the trial page and for the eligibility checklist |
+| **ClinicalTrials.gov** | Full trial details, criteria and sites | Read live on the trial page, for the eligibility checklist and by the copilot's `get_trial_criteria` |
 
 ## When each one is called
 
@@ -68,7 +68,13 @@ each copilot step carries a Supabase, turbopuffer or ClinicalTrials.gov label.
    from `ts-patient-*` (reading only), with the same ids, and generates medications, labs, extra conditions and dates of
    birth, which don't exist in turbopuffer. It prints row counts for every turbopuffer namespace before and after, so you
    can see nothing there changed. `npm run setup-db -- --check` prints only the counts.
-6. **Add `APP_DATABASE_URL`** (from step 5) to the Vercel project for all environments, then redeploy.
+6. **Add `APP_DATABASE_URL`** (from step 5) to the Vercel project for all environments, then redeploy. The printed
+   URL has no `sslmode`; the app asks for SSL itself (`lib/db.ts`), which Supabase can require. Set `PGSSL=off` only
+   for a local Postgres without SSL.
+7. **Custom domain, if Clerk uses production keys.** A Clerk production instance (`pk_live_…`) only accepts requests
+   from its own domain, so on a `*.vercel.app` address the sign-in form never loads ("Invalid host"). Add a subdomain
+   of the Clerk instance's domain to the Vercel project (**Settings → Domains**), and set `CLERK_AUTHORIZED_ORIGINS`
+   to it. With development keys (`pk_test_…`) the `vercel.app` address works as is.
 
 Optional variables carry over from the original app: `COPILOT_MODEL`, `COPILOT_PROMPT_CACHE`, `ANTHROPIC_API_KEY`,
 `READ_ONLY` (now blocks record edits too), the `LANGFUSE_*` keys, and `CLERK_AUTHORIZED_ORIGINS` to pin production
@@ -150,8 +156,8 @@ observation (a retriever for reads, a span for writes) with its request, timings
   `turbopuffer-consistency-strong` and `turbopuffer-consistency-eventual`.
 - **Copilot** (`answer-copilot-question`, an agent, tagged `copilot`): one `generate-response` generation per model
   turn with the full prompt it was sent (system prompt, tool definitions, earlier turns, tool results), the model's
-  thinking summary and tool calls, tokens and cost; a `read-patient-record`, `read-lab-history`, `read-patient-notes` or
-  `search-sources` tool observation for each tool call, with the store it read and, for search, the filters turbopuffer applied. Questions in one copilot conversation share a session.
+  thinking summary and tool calls, tokens and cost; a `read-patient-record`, `read-lab-history`, `read-patient-notes`,
+  `search-sources` or `read-trial-criteria` tool observation for each tool call, with the store it read and, for search, the filters turbopuffer applied. Questions in one copilot conversation share a session.
 - **Eligibility** (`check-trial-eligibility`, tagged `eligibility`): `fetch-trial`, `read-patient-record` and `read-patient-notes`, then the
   `assess-eligibility-criteria` generation.
 
@@ -255,7 +261,7 @@ npm run dev                      # http://localhost:3000
 | --- | --- | --- | --- |
 | `ts-pubmed` | Oncology and cardiology abstracts, 2015 onward | 70,990 | Searched |
 | `ts-trials` | Interventional studies, most recently updated first | 49,400 | Searched |
-| `ts-patients`, `ts-patient-*` | The original app's patients and notes | 100 patients, 447 seeded notes | Read once by `npm run setup-db` |
+| `ts-patients`, `ts-patient-*` | The original app's patients and notes | 100 patients, 452 notes | Read once by `npm run setup-db` |
 
 **Supabase**, schema in `supabase/migrations/`, loaded by `scripts/setup-db.mjs`:
 
@@ -293,7 +299,7 @@ npm run dev                      # http://localhost:3000
 | `lib/eligibility.ts`, `lib/ctgov.ts`, `lib/places.ts` | Eligibility checklist, live ClinicalTrials.gov reads, site distances |
 | `lib/langfuse.ts`, `lib/langfuse-setup.ts`, `lib/traced-fetch.ts`, `instrumentation.ts` | Optional Langfuse tracing, including network spans |
 | `components/` | App shell and ⌘K, search view, explain panel, workspace, record panel, new patient form, save details, copilot, trial view and sites map, sign-in frame |
-| `proxy.ts` | Clerk sign-in check before every request |
+| `proxy.ts` | Clerk sign-in check before every request, and Clerk's `/__clerk` frontend API proxy |
 | `walkthrough/` | Ten-minute turbopuffer notebook (Colab) |
 
 ## Data sources
