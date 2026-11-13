@@ -17,6 +17,9 @@ export function db(): postgres.Sql {
     max: 5,
     idle_timeout: 20,
     connect_timeout: 10,
+    // Supabase can require SSL for every role, and the URL setup-db prints has no sslmode, so ask for it here
+    // (PGSSL=off for a local Postgres without SSL, as in setup-db).
+    ssl: process.env.PGSSL === "off" ? false : "require",
     // Dates come back as YYYY-MM-DD strings, the format the UI and the trials data already use.
     types: { date: { to: 1082, from: [1082], serialize: (v: string) => v, parse: (v: string) => v } },
   });
