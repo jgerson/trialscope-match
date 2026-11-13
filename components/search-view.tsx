@@ -27,7 +27,8 @@ type Area = "notes" | "literature";
 /** Sources from the URL: `in=notes` or `in=pubmed,trials`; older links use `scope`. */
 function initialSources(params: URLSearchParams): { area: Area; lit: Source[] } {
   const inParam = params.get("in");
-  // Notes aren't searchable in this app (they live in Supabase), so old notes links open the literature search.
+  // Notes are searched from the patient workspace (the search across patients), not here, so old notes links open the
+  // literature search.
   if (inParam === "notes" || params.get("scope") === "patient") return { area: "literature", lit: LITERATURE };
   const picked = (inParam ?? "").split(",").filter((s): s is Source => LITERATURE.includes(s as Source));
   if (picked.length) return { area: "literature", lit: picked };

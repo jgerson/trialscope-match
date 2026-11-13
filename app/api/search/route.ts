@@ -24,8 +24,8 @@ export async function POST(req: Request) {
 
   const sources = parseSources(body.sources, body.scope);
 
-  // The shared corpora in turbopuffer. Patient notes live in Supabase in this app and aren't searchable; the patient
-  // (from Supabase) only supplies age and sex when "match patient" is on.
+  // The shared corpora in turbopuffer. Notes are searched from the patient workspace instead (/api/patient-search, over
+  // match-notes); here the patient (from Supabase) only supplies age and sex when "match patient" is on.
   const targets: { namespace: string; filter: unknown[] | null }[] = [];
   if (sources.includes("pubmed")) targets.push({ namespace: NS.pubmed, filter: buildFilters("pubmed", f) });
   if (sources.includes("trials")) targets.push({ namespace: NS.trials, filter: buildFilters("trials", f, patient) });
