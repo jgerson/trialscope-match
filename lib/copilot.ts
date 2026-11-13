@@ -1,10 +1,12 @@
-// The copilot: Claude with two tools backed by turbopuffer, streamed to the browser as NDJSON events.
+// The copilot: Claude with four tools, streamed to the browser as NDJSON events. Three read the patient from Supabase
+// Postgres (record, lab history, notes); one searches the shared corpora in turbopuffer (PubMed, trials).
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { getVercelOidcToken } from "@vercel/oidc";
 import { config, NS } from "./config";
+import { getRecord, labHistory, listNotes, recordLines } from "./patients";
 import { tracedFetch } from "./traced-fetch";
-import { buildFilters, listNotes, search } from "./tpuf";
+import { buildFilters, search } from "./tpuf";
 import { getActiveTraceId, startActiveObservation, startObservation, updateActiveObservation } from "@langfuse/tracing";
 import { assistantMessage, promptOf, usageOf } from "./langfuse";
 import { costOf, priceOf } from "./pricing";
@@ -14,16 +16,35 @@ const TAG: Record<Hit["kind"], string> = { notes: "N", pubmed: "P", trials: "T" 
 
 const TOOLS: Anthropic.Tool[] = [
   {
+    name: "get_patient_record",
+    description:
+      "The current patient's structured record from the clinic database (Postgres): demographics and ECOG, every " +
+      "condition with stage and status, current and stopped medications with drug class, and the latest result of each " +
+      "lab and biomarker. Each line has a tag like [R3]; cite it. Call this first for any question about the patient.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "get_lab_history",
+    description:
+      "Every result over time for one lab or biomarker of the current patient (Postgres), oldest first, e.g. 'eGFR', " +
+      "'LVEF', 'creatinine', 'PD-L1'. Use for trends and for criteria with a time window.",
+    input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+  },
+  {
+    name: "read_patient_notes",
+    description: "Read the current patient's most recent clinical notes in full, newest first (Postgres).",
+    input_schema: { type: "object", properties: { limit: { type: "integer" } } },
+  },
+  {
     name: "search",
     description:
-      "Search TrialScope. Sources: 'patient' (the current patient's notes), 'pubmed' (oncology and cardiology abstracts, " +
-      "2015 onward) and 'trials' (ClinicalTrials.gov interventional studies). Hybrid search (BM25 + vector, fused with " +
-      "RRF). Put drug names, genes and NCT ids in the query text. Use filters to narrow trials by status, phase, " +
-      "country, patient age and sex.",
+      "Search the literature in turbopuffer. Sources: 'pubmed' (oncology and cardiology abstracts, 2015 onward) and " +
+      "'trials' (ClinicalTrials.gov interventional studies). Hybrid search (BM25 + vector, fused with RRF). Put drug " +
+      "names, genes and NCT ids in the query text. Use filters to narrow trials by status, phase, country, patient age and sex.",
     input_schema: {
       type: "object",
       properties: {
-        sources: { type: "array", items: { type: "string", enum: ["patient", "pubmed", "trials"] } },
+        sources: { type: "array", items: { type: "string", enum: ["pubmed", "trials"] } },
         query: { type: "string" },
         trial_status: {
           type: "array",
@@ -38,22 +59,22 @@ const TOOLS: Anthropic.Tool[] = [
       required: ["sources", "query"],
     },
   },
-  {
-    name: "read_patient_notes",
-    description: "Read the current patient's most recent notes in full, newest first.",
-    input_schema: { type: "object", properties: { limit: { type: "integer" } } },
-  },
 ];
 
-const SYSTEM = (patient: Patient | null) => `You are the TrialScope copilot, helping a physician search their own patient \
-notes, PubMed and ClinicalTrials.gov. All patients are synthetic demo records.
+const SYSTEM = (patient: Patient | null) => `You are the TrialScope copilot, helping a physician with their patient's record \
+and notes (in the clinic's Postgres database), PubMed and ClinicalTrials.gov (searched in turbopuffer). All patients \
+are synthetic demo records.
 
 Rules:
 - Every note returned for the current patient belongs to that patient. A note's author is the clinician who wrote it, \
 never the patient. Don't exclude or question a note because of who wrote it.
-- Ground every claim in tool results and cite it with the tag shown in the result, like [N2], [P1] or [T3].
-- For trial matching, first read the patient's notes, extract diagnosis, stage, biomarkers, age, sex and location, then \
-search trials with filters (usually status Recruiting or Not yet recruiting, the patient's country, and match_patient_age_sex).
+- Ground every claim in tool results and cite it with the tag shown in the result, like [R3], [N2], [P1] or [T3].
+- Exact facts (diagnosis, stage, current medications, lab values and dates, biomarkers, age, sex, location) come from \
+get_patient_record and get_lab_history. Notes add context the record lacks. If the record and a note disagree, say so.
+- For trial matching, first call get_patient_record, then search trials with filters (usually status Recruiting or Not \
+yet recruiting, the patient's country, and match_patient_age_sex), using the diagnosis, stage and biomarkers in the query. \
+When a trial's summary names a requirement the record answers (a lab threshold, a prior or current drug), say whether \
+the record meets it and cite the [R] line.
 - Say plainly that eligibility needs physician review against the full protocol. Do not give treatment advice.
 - Only state eligibility details that appear in the tool results. If a fit depends on something the results don't show, \
 say it needs checking instead of assuming it.
@@ -61,7 +82,7 @@ say it needs checking instead of assuming it.
 Start each bullet with the tag and the NCT id in bold, like "[T1] **NCT01234567**", then the trial's short name and phase, \
 then one sentence on why it fits. End with one line saying eligibility needs physician review.
 
-${patient ? `Current patient: ${JSON.stringify(patient)}` : "No patient is selected; the 'patient' source is unavailable."}`;
+${patient ? `Current patient (summary; call get_patient_record for the full record): ${JSON.stringify(patient)}` : "No patient is selected; the patient tools are unavailable."}`;
 
 /** A search as the copilot ran it, slimmed for the browser: enough for the Explain panel and the applied filters. */
 export type StepSearch = Omit<SearchResponse, "hits" | "runs"> & {
@@ -72,6 +93,8 @@ export type StepSearch = Omit<SearchResponse, "hits" | "runs"> & {
 export type CopilotEvent =
   | {
       type: "step"; tool: string; input: Record<string, unknown>; results: number; ms: number;
+      // Which database answered: the patient tools read Supabase Postgres, search reads turbopuffer.
+      store: "supabase" | "turbopuffer";
       returned: { tag: string; title: string; key: string }[]; reasoning?: string;
       // Search steps only: the filters each source actually applied, and the full ranking for the Explain panel.
       filters?: { source: string; filters: string[] }[]; search?: StepSearch;
@@ -128,7 +151,8 @@ function reasoningOf(content: Anthropic.ContentBlock[]): string | undefined {
 
 // Langfuse observation names for the tools. Names are an API for dashboards and evaluators: keep them stable.
 const TOOL_OBSERVATION: Record<string, string> = {
-  search: "search-sources", read_patient_notes: "read-patient-notes",
+  search: "search-sources", read_patient_notes: "read-patient-notes", get_patient_record: "read-patient-record",
+  get_lab_history: "read-lab-history",
 };
 
 /**
@@ -200,15 +224,40 @@ async function copilotLoop(
 
   async function runTool(name: string, input: Record<string, unknown>, reasoning?: string): Promise<string> {
     const t1 = performance.now();
+    if (name === "get_patient_record") {
+      if (!patient) return "No patient selected.";
+      const record = await getRecord(patient.id);
+      if (!record) return "This patient is no longer in the database.";
+      const lines = recordLines(record);
+      const ms = performance.now() - t1;
+      updateActiveObservation({ metadata: { store: "supabase", queries: record.queries, lines: lines.length } }, { asType: "tool" });
+      emit({ type: "step", tool: name, input, store: "supabase", results: lines.length, ms,
+        returned: lines.map((l) => ({ tag: l.tag, title: l.text, key: `record:${l.tag}` })), reasoning });
+      return `Record for ${patient.name} (patient ${patient.id}), from the clinic database:\n${lines.map((l) => `[${l.tag}] ${l.text}`).join("\n")}`;
+    }
+    if (name === "get_lab_history") {
+      if (!patient) return "No patient selected.";
+      const wanted = String(input.name ?? "").trim();
+      if (!wanted) return "Name a lab or biomarker.";
+      const { rows } = await labHistory(patient.id, wanted);
+      updateActiveObservation({ metadata: { store: "supabase", name: wanted, rows: rows.length } }, { asType: "tool" });
+      // History rows get their own tags, numbered after the record's, so they never collide with [R] lines.
+      const lines = rows.map((o, i) => ({ tag: `H${i + 1}`, text: o.kind === "lab"
+        ? `${o.name} ${o.value} ${o.unit} on ${o.observed_on}` : `${o.name} ${o.result} on ${o.observed_on}` }));
+      emit({ type: "step", tool: name, input, store: "supabase", results: rows.length, ms: performance.now() - t1,
+        returned: lines.map((l) => ({ tag: l.tag, title: l.text, key: `history:${wanted}:${l.tag}` })), reasoning });
+      return lines.length ? `${wanted} history for ${patient.name}, oldest first:\n${lines.map((l) => `[${l.tag}] ${l.text}`).join("\n")}`
+        : `No results named like "${wanted}" for this patient.`;
+    }
     if (name === "read_patient_notes") {
       if (!patient) return "No patient selected.";
       // Capped: some models ask for 50+ notes, which bloats every later turn of the conversation.
       const notes = (await listNotes(patient.id)).slice(0, Math.min(Number(input.limit ?? 10), 20));
-      updateActiveObservation({ metadata: { namespace: NS.patient(patient.id), notes: notes.length } }, { asType: "tool" });
+      updateActiveObservation({ metadata: { store: "supabase", table: "notes", notes: notes.length } }, { asType: "tool" });
       const returned: { tag: string; title: string; key: string }[] = [];
       const out = notes.map((n) => {
         const h: Hit = {
-          key: `${NS.patient(patient.id)}:${n.id}`, id: n.id, kind: "notes", namespace: NS.patient(patient.id), title: n.title,
+          key: `notes:${n.id}`, id: n.id, kind: "notes", namespace: "supabase:notes", title: n.title,
           url: null, meta: [n.visit_date, n.note_type, n.author], code: null, snippet: n.body.slice(0, 900), nsRank: 0, overall: 0,
           fused: 0, rrf: 0, vector: null, bm25: null, terms: [], raw: {},
         };
@@ -216,12 +265,11 @@ async function copilotLoop(
         returned.push({ tag: t, title: h.title, key: h.key });
         return fmt(t, h);
       });
-      emit({ type: "step", tool: name, input, results: notes.length, ms: performance.now() - t1, returned, reasoning });
+      emit({ type: "step", tool: name, input, store: "supabase", results: notes.length, ms: performance.now() - t1, returned, reasoning });
       return out.length ? `Notes for ${patient.name} (patient ${patient.id}), newest first:\n\n${out.join("\n\n")}` : "No notes.";
     }
     const sources = (input.sources as string[]) ?? [];
     const targets: { namespace: string; filter: unknown[] | null }[] = [];
-    if (sources.includes("patient") && patient) targets.push({ namespace: NS.patient(patient.id), filter: null });
     if (sources.includes("pubmed")) targets.push({ namespace: NS.pubmed, filter: buildFilters("pubmed", { yearFrom: Number(input.pubmed_year_from ?? 0) }) });
     if (sources.includes("trials")) {
       targets.push({
@@ -252,7 +300,7 @@ async function copilotLoop(
       hits: res.hits.map((h) => ({ ...h, raw: {} })),
     };
     emit({
-      type: "step", tool: name, input, results: res.hits.length, ms: performance.now() - t1,
+      type: "step", tool: name, input, store: "turbopuffer", results: res.hits.length, ms: performance.now() - t1,
       returned: shown.map(({ t, h }) => ({ tag: t, title: h.title, key: h.key })), reasoning,
       filters: res.runs.map((r) => ({ source: r.short, filters: r.filters })), search: slim,
     });

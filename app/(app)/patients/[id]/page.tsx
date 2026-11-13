@@ -1,7 +1,6 @@
 import { notFound } from "next/navigation";
 import { Workspace } from "@/components/workspace";
-import { getPatient } from "@/lib/patients";
-import { listNotes } from "@/lib/tpuf";
+import { getPatient, getRecord, listNotes } from "@/lib/patients";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const p = await getPatient((await params).id);
@@ -10,8 +9,10 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 
 export default async function PatientPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const patient = await getPatient(id);
-  if (!patient) notFound();
-  const notes = await listNotes(id);
-  return <Workspace patient={patient} initialNotes={notes} />;
+  // The structured record and the notes both come from Supabase, in parallel.
+  const t0 = performance.now();
+  const [record, notes] = await Promise.all([getRecord(id), listNotes(id)]);
+  if (!record) notFound();
+  const loadMs = Math.round(performance.now() - t0);
+  return <Workspace patient={record.patient} initialRecord={record} initialNotes={notes} loadMs={loadMs} />;
 }

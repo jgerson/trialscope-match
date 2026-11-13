@@ -1,12 +1,13 @@
 "use client";
-// Patient workspace: notes list, note editor and the copilot side by side.
+// Patient workspace: the structured record and notes (both from Supabase), the note editor and the copilot side by side.
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { useUser } from "@clerk/nextjs";
 import { Check, Loader2, Plus } from "lucide-react";
-import type { Note, Patient, WriteReport } from "@/lib/types";
+import type { Note, Patient, PatientRecord, WriteReport } from "@/lib/types";
 import { useApp } from "./app-shell";
 import { Copilot } from "./copilot";
+import { RecordPanel } from "./record-panel";
 import { SaveDetails } from "./save-details";
 import { cx } from "./ui";
 
@@ -19,7 +20,9 @@ function blank(author: string): Note {
   return { id: "", title: "", body: TEMPLATE, note_type: "Visit note", visit_date: new Date().toISOString().slice(0, 10), author };
 }
 
-export function Workspace({ patient, initialNotes }: { patient: Patient; initialNotes: Note[] }) {
+export function Workspace({ patient, initialRecord, initialNotes, loadMs }: {
+  patient: Patient; initialRecord: PatientRecord; initialNotes: Note[]; loadMs: number;
+}) {
   const { readOnly } = useApp();
   const { user } = useUser();
   const me = user?.fullName || user?.username || user?.primaryEmailAddress?.emailAddress || "You";
@@ -75,7 +78,7 @@ export function Workspace({ patient, initialNotes }: { patient: Patient; initial
           <span className="rounded-lg bg-accent-soft px-2.5 py-1 font-semibold text-accent-strong">{patient.primary_dx}</span>
           {stageText(patient) && <span className="rounded-lg bg-surface px-2.5 py-1 text-ink-2 ring-1 ring-line">{stageText(patient)}</span>}
           {patient.biomarkers && <span className="rounded-lg bg-surface px-2.5 py-1 text-ink-2 ring-1 ring-line">{patient.biomarkers}</span>}
-          <span className="rounded-lg bg-notes-soft px-2.5 py-1 font-mono text-[12px] text-notes">ts-patient-{patient.id}</span>
+          <span className="rounded-lg bg-notes-soft px-2.5 py-1 font-mono text-[12px] text-notes" title="Patient id in Supabase">{patient.id}</span>
         </div>
       </header>
 
@@ -101,8 +104,10 @@ export function Workspace({ patient, initialNotes }: { patient: Patient; initial
         </ul>
       </nav>
 
-      {/* editor */}
-      <section className="min-w-0">
+      {/* record and editor */}
+      <section className="min-w-0 space-y-6">
+        <RecordPanel key={patient.id} initial={initialRecord} loadMs={loadMs} />
+        <div>
         <div className="mb-3 flex gap-2 2xl:hidden">
           <select value={selId} onChange={(e) => open(notes.find((n) => n.id === e.target.value) ?? null)} aria-label="Choose a note"
             className="min-w-0 flex-1 rounded-lg border border-line bg-surface px-3 py-2 text-[14px]">
@@ -125,7 +130,7 @@ export function Workspace({ patient, initialNotes }: { patient: Patient; initial
             <div className="flex items-center gap-3">
               {saved && !dirty && (
                 <span className="inline-flex items-center gap-1.5 text-[12.5px] text-accent-strong">
-                  <Check size={14} />Saved in {(saved.report.writeMs / 1000).toFixed(2)} s, searchable {Math.round(saved.report.visibleMs)} ms later
+                  <Check size={14} />{saved.report.kind === "update" ? "Updated" : "Inserted"} in Postgres in {Math.round(saved.report.writeMs)} ms
                   <button type="button" onClick={() => setShowDetails((v) => !v)} aria-expanded={showDetails}
                     className="ml-1 font-semibold text-ink-2 underline underline-offset-2 hover:text-accent">
                     {showDetails ? "Hide details" : "Details"}
@@ -163,7 +168,8 @@ export function Workspace({ patient, initialNotes }: { patient: Patient; initial
           )}
         </div>
         {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
-        {saved && showDetails && !dirty && <SaveDetails report={saved.report} note={draft} patient={patient} savedAt={saved.at} />}
+        {saved && showDetails && !dirty && <SaveDetails report={saved.report} note={draft} />}
+        </div>
       </section>
 
       <Copilot patient={patient} />

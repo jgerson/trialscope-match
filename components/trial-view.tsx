@@ -57,6 +57,7 @@ export function TrialView({ trial }: { trial: Trial }) {
 interface CheckResult {
   criteria: CriterionResult[];
   notes: { tag: string; title: string; date: string; type: string }[];
+  record?: { tag: string; text: string }[];
   ms: number; cost: number | null; inTokens: number; outTokens: number; downgraded: number;
 }
 
@@ -89,7 +90,7 @@ function Eligibility({ trial, patient }: { trial: Trial; patient: Patient }) {
 
   const r = state.result;
   const counts = r && (["meets", "fails", "unknown"] as CriterionStatus[]).map((s) => [s, r.criteria.filter((c) => c.status === s).length] as const);
-  const noteTitle = (tag: string) => (tag === "Record" ? "Patient record" : r?.notes.find((n) => n.tag === tag)?.title ?? tag);
+  const noteTitle = (tag: string) => r?.record?.find((l: { tag: string }) => l.tag === tag)?.text ?? r?.notes.find((n) => n.tag === tag)?.title ?? tag;
 
   return (
     <section aria-labelledby="elig-h" className="rounded-2xl border border-line bg-surface p-5">
@@ -149,7 +150,7 @@ function Eligibility({ trial, patient }: { trial: Trial; patient: Patient }) {
                               {c.evidence.map((e) => (
                                 <span key={e} title={noteTitle(e)}
                                   className="rounded-md bg-notes-soft px-1.5 py-px font-mono text-[11px] font-semibold text-notes">
-                                  {e === "Record" ? "Record" : `${e} · ${noteTitle(e)}`}
+                                  {`${e} · ${noteTitle(e)}`}
                                 </span>
                               ))}
                             </div>

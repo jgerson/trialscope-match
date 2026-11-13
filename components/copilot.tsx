@@ -4,14 +4,14 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowUp, ArrowUpRight, BookOpen, Check, ChevronRight, FileText, Loader2, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
+import { ArrowUp, ArrowUpRight, BookOpen, Check, ChevronRight, Database, FileText, Loader2, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
 import type { Hit, Patient, SearchResponse, Usage } from "@/lib/types";
 import { ExplainDialog } from "./explain";
 import { useApp } from "./app-shell";
 import { cx, SourceTag } from "./ui";
 
 interface Step {
-  tool: string; input: Record<string, unknown>; results: number; ms: number;
+  tool: string; input: Record<string, unknown>; results: number; ms: number; store?: "supabase" | "turbopuffer";
   returned?: { tag: string; title: string; key: string }[]; reasoning?: string;
   filters?: { source: string; filters: string[] }[]; search?: SearchResponse;
 }
@@ -22,14 +22,14 @@ interface Turn {
   traceId?: string;
 }
 
-const TAG_RE = /\[([NPT]\d+)\]/g;
+const TAG_RE = /\[([NPTRH]\d+)\]/g;
 /** Tags the finished answer cites, or undefined while it is still being written. */
 const citedIn = (t: Turn) => (t.seconds == null ? undefined : new Set([...t.answer.matchAll(TAG_RE)].map((m) => m[1])));
 
 const SUGGESTIONS = (p: Patient) => [
   `Is there a recruiting trial ${p.name.split(" ")[0]} might qualify for?`,
-  "What does recent literature say about the main risks of the current treatment?",
-  "Summarize this patient's course so far.",
+  "Is any current medication or lab value likely to exclude them from trials?",
+  "How has kidney function changed over time?",
 ];
 
 export function Copilot({ patient }: { patient: Patient }) {
@@ -105,7 +105,7 @@ export function Copilot({ patient }: { patient: Patient }) {
           <div>
             <p className="text-[14px] leading-relaxed text-ink-2">
               {copilotEnabled
-                ? `Ask about ${patient.name.split(" ")[0]}, the literature or open trials. Every answer cites the notes, abstracts and trials it used.`
+                ? `Ask about ${patient.name.split(" ")[0]}, the literature or open trials. Every answer cites the record rows, notes, abstracts and trials it used.`
                 : "The copilot is off on this deployment. Deploy on Vercel with AI Gateway enabled, or set AI_GATEWAY_API_KEY or ANTHROPIC_API_KEY, to turn it on. Search and notes work without it."}
             </p>
             <div className="mt-4 space-y-2">
@@ -157,6 +157,10 @@ export function Copilot({ patient }: { patient: Patient }) {
 function StepRow({ step, cited }: { step: Step; cited?: Set<string> }) {
   const [explain, setExplain] = useState<Hit | null>(null);
   const isNotes = step.tool === "read_patient_notes";
+  const isRecord = step.tool === "get_patient_record" || step.tool === "get_lab_history";
+  const label = step.tool === "get_patient_record" ? "Read the patient record"
+    : step.tool === "get_lab_history" ? <>Read the <b className="font-medium text-ink-2">{String(step.input.name)}</b> history</>
+    : isNotes ? "Read the patient's notes" : null;
   const usedCount = cited && step.returned ? step.returned.filter((r) => cited.has(r.tag)).length : null;
   const sources = (step.input.sources as string[] | undefined)?.join(", ");
   const filters = ["trial_status", "trial_phases", "country"].map((k) => step.input[k]).filter(Boolean).flat().join(", ");
@@ -165,11 +169,17 @@ function StepRow({ step, cited }: { step: Step; cited?: Set<string> }) {
       <details className="group">
         <summary className="flex cursor-pointer list-none gap-2.5 rounded-md hover:text-ink-2 [&::-webkit-details-marker]:hidden">
           <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-md bg-accent-soft text-accent">
-            {isNotes ? <FileText size={12} /> : <BookOpen size={12} />}
+            {isRecord ? <Database size={12} /> : isNotes ? <FileText size={12} /> : <BookOpen size={12} />}
           </span>
           <span className="flex-1">
-            {isNotes ? "Read the patient's notes" : <>Searched {sources} for <b className="font-medium text-ink-2">“{String(step.input.query)}”</b>{filters ? ` (${filters})` : ""}</>}
-            <span className="tabular-nums">, {step.results} results in {Math.round(step.ms)} ms{usedCount != null ? `, ${usedCount} cited` : ""}</span>
+            {label ?? <>Searched {sources} for <b className="font-medium text-ink-2">“{String(step.input.query)}”</b>{filters ? ` (${filters})` : ""}</>}
+            <span className="tabular-nums">, {step.results} {isRecord || isNotes ? "rows" : "results"} in {Math.round(step.ms)} ms{usedCount != null ? `, ${usedCount} cited` : ""}</span>
+            {step.store && (
+              <span className={cx("ml-1.5 rounded px-1 py-px font-mono text-[10.5px]",
+                step.store === "supabase" ? "bg-notes-soft text-notes" : "bg-trials-soft text-trials")}>
+                {step.store === "supabase" ? "Supabase" : "turbopuffer"}
+              </span>
+            )}
           </span>
           <ChevronRight size={14} aria-hidden className="mt-1 shrink-0 transition-transform group-open:rotate-90" />
         </summary>

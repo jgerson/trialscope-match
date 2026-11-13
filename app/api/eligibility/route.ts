@@ -5,10 +5,9 @@ import { copilotClient } from "@/lib/copilot";
 import { getTrial, NCT_RE } from "@/lib/ctgov";
 import { checkEligibility } from "@/lib/eligibility";
 import { flushLangfuse, newTrace } from "@/lib/langfuse";
-import { getPatient } from "@/lib/patients";
+import { getPatient, getRecord, listNotes } from "@/lib/patients";
 import { costOf } from "@/lib/pricing";
 import { requireUserId } from "@/lib/session";
-import { listNotes } from "@/lib/tpuf";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -30,12 +29,20 @@ export async function POST(req: Request) {
       span.update({ input: { nct, patientId: patient.id }, metadata: { model: config.copilotModel } });
       const t0 = performance.now();
       try {
-        const [trial, notes] = await Promise.all([
+        // The trial from ClinicalTrials.gov; the record and notes from Supabase. All three in parallel.
+        const [trial, record, notes] = await Promise.all([
           startActiveObservation("fetch-trial", async (r) => {
             r.update({ input: { nct }, metadata: { source: "ClinicalTrials.gov" } });
             const t = await getTrial(nct);
             r.update({ output: t ? { title: t.title, minAge: t.minAge, maxAge: t.maxAge, sex: t.sex, criteria: t.criteria } : null });
             return t;
+          }, { asType: "retriever" }),
+          startActiveObservation("read-patient-record", async (r) => {
+            r.update({ input: { patientId: patient.id }, metadata: { source: "Supabase" } });
+            const rec = await getRecord(patient.id);
+            r.update({ output: rec ? { conditions: rec.conditions.length, medications: rec.medications.length, results: rec.latest.length } : null,
+              metadata: { source: "Supabase", queries: rec?.queries } });
+            return rec;
           }, { asType: "retriever" }),
           startActiveObservation("read-patient-notes", async (r) => {
             r.update({ input: { patientId: patient.id } });
@@ -52,7 +59,8 @@ export async function POST(req: Request) {
           span.update({ level: "WARNING", statusMessage: "Trial lists no criteria." });
           return Response.json({ error: "This trial lists no eligibility criteria." }, { status: 422 });
         }
-        const result = await checkEligibility(await copilotClient(), config.copilotModel, trial, patient, notes.slice(0, 20));
+        if (!record) return Response.json({ error: "This patient is no longer in the database." }, { status: 404 });
+        const result = await checkEligibility(await copilotClient(), config.copilotModel, trial, record, notes.slice(0, 20));
         const cost = await costOf(config.copilotModel, result.inTokens, result.outTokens);
         const ms = performance.now() - t0;
         console.log(JSON.stringify({

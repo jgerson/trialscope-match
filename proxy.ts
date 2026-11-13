@@ -5,7 +5,9 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
 const isPublic = createRouteMatcher(["/sign-in(.*)"]);
 
-const AUTHORIZED_ORIGINS = ["https://www.trialscope.space", "https://trialscope.space"];
+// The production origins session tokens must come from, e.g. "https://match.trialscope.space". Unset (the default for a
+// new deployment on a vercel.app address with Clerk's development keys), Clerk's default check applies.
+const AUTHORIZED_ORIGINS = (process.env.CLERK_AUTHORIZED_ORIGINS ?? "").split(",").map((o) => o.trim()).filter(Boolean);
 
 export default clerkMiddleware(
   async (auth, req) => {
@@ -18,7 +20,7 @@ export default clerkMiddleware(
   // development keys), so they keep the default.
   {
     signInUrl: "/sign-in",
-    authorizedParties: process.env.VERCEL_ENV === "production" ? AUTHORIZED_ORIGINS : undefined,
+    authorizedParties: process.env.VERCEL_ENV === "production" && AUTHORIZED_ORIGINS.length ? AUTHORIZED_ORIGINS : undefined,
   },
 );
 

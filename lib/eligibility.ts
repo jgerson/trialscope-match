@@ -1,10 +1,12 @@
 // Eligibility checklist: one model call reads a trial's full criteria (live from ClinicalTrials.gov) and the patient's
-// record and notes, then reports each criterion as meets, doesn't meet, or unknown, with the evidence it relied on.
+// structured record and notes (from Supabase), then reports each criterion as meets, doesn't meet, or unknown, with the
+// evidence it relied on: a record line like R4 (a medication, a lab value with its date) or a note like N2.
 // The server enforces the rules that matter: a verdict other than "unknown" must cite evidence that exists.
 import "server-only";
 import type Anthropic from "@anthropic-ai/sdk";
 import { tracedCreate } from "./langfuse";
-import type { Note, Patient } from "./types";
+import { recordLines } from "./patients";
+import type { Note, PatientRecord } from "./types";
 
 export type CriterionStatus = "meets" | "fails" | "unknown";
 
@@ -12,13 +14,14 @@ export interface CriterionResult {
   section: "inclusion" | "exclusion";
   criterion: string;
   status: CriterionStatus;
-  evidence: string[]; // "Record" for the patient record, or note tags like "N2"
+  evidence: string[]; // record line tags like "R4", or note tags like "N2"
   explanation: string;
 }
 
 export interface EligibilityResult {
   criteria: CriterionResult[];
   notes: { tag: string; title: string; date: string; type: string }[];
+  record: { tag: string; text: string }[];
   inTokens: number;
   outTokens: number;
   downgraded: number; // verdicts turned into "unknown" because they cited no valid evidence
@@ -30,7 +33,9 @@ const NOTE_CHARS = 3000;
 const SYSTEM = `You screen one patient against one clinical trial's eligibility criteria, for a physician to review. \
 All patients are synthetic demo records.
 
-You receive the trial's criteria text, the patient record, and the patient's notes, each labelled with a tag like [N1].
+You receive the trial's criteria text, the patient's structured record (one fact per line, tagged like [R1]: \
+demographics, conditions with stage, current and stopped medications, latest labs and biomarkers with dates), and the \
+patient's notes, tagged like [N1].
 
 List the criteria in order, inclusion first, then exclusion, at most ${MAX_CRITERIA}. Restate each in at most 25 words. \
 Merge trivial administrative criteria (consent, willingness to comply) into one item per section. If the trial lists no criteria for a section, report nothing for it (no placeholder item).
@@ -43,8 +48,9 @@ excluding condition is present.
 - unknown: the information needed isn't in the record or notes, or the patient hasn't reached that point in care yet \
 (for example, surgery not done). This is expected for many criteria; never guess.
 
-Every meets or fails verdict must list its evidence: "Record" for the patient record and/or the tags of the notes it \
-relies on. Judge only from the text given, not from typical patients or medical knowledge about what is likely. In the \
+Every meets or fails verdict must list its evidence: the tags of the record lines and/or notes it relies on. Prefer \
+record lines for exact facts: a lab threshold needs the lab line with its value and date, a drug exclusion needs the \
+medication lines. A stopped medication is not current. Judge only from the text given, not from typical patients or medical knowledge about what is likely. In the \
 explanation, say in one sentence what the evidence shows or what is missing. Report through the tool.`;
 
 const TOOL: Anthropic.Tool = {
@@ -62,7 +68,7 @@ const TOOL: Anthropic.Tool = {
             section: { type: "string", enum: ["inclusion", "exclusion"] },
             criterion: { type: "string" },
             status: { type: "string", enum: ["meets", "fails", "unknown"] },
-            evidence: { type: "array", items: { type: "string" }, description: "\"Record\" and/or note tags like N2." },
+            evidence: { type: "array", items: { type: "string" }, description: "Record line tags like R4 and/or note tags like N2." },
             explanation: { type: "string" },
           },
           required: ["section", "criterion", "status", "evidence", "explanation"],
@@ -80,14 +86,12 @@ export async function checkEligibility(
   llm: Anthropic,
   model: string,
   trial: { nct: string; title: string; criteria: string; minAge: string; maxAge: string; sex: string },
-  patient: Patient,
+  rec: PatientRecord,
   notes: Note[],
 ): Promise<EligibilityResult> {
   const tagged = notes.map((n, i) => ({ tag: `N${i + 1}`, note: n }));
-  const record = JSON.stringify({
-    age: patient.age, sex: patient.sex, location: `${patient.city}, ${patient.state}`, diagnosis: patient.primary_dx,
-    stage: patient.stage, biomarkers: patient.biomarkers, specialty: patient.specialty,
-  });
+  const lines = recordLines(rec);
+  const record = lines.map((l) => `[${l.tag}] ${l.text}`).join("\n");
   const noteText = tagged
     .map(({ tag, note: n }) => `[${tag}] ${n.visit_date} | ${n.note_type} | ${n.title}\n${n.body.slice(0, NOTE_CHARS)}`)
     .join("\n\n");
@@ -106,7 +110,7 @@ export async function checkEligibility(
   });
 
   // The model's output is untrusted: keep well-formed items, and only evidence that really exists.
-  const known = new Set(["Record", ...tagged.map((t) => t.tag)]);
+  const known = new Set([...lines.map((l) => l.tag), ...tagged.map((t) => t.tag)]);
   const call = msg.content.find((b) => b.type === "tool_use");
   const raw = (call?.type === "tool_use" ? (call.input as { criteria?: unknown }).criteria : null) ?? [];
   if (!Array.isArray(raw)) throw new Error("The check returned no criteria.");
@@ -131,6 +135,7 @@ export async function checkEligibility(
   return {
     criteria,
     notes: tagged.map(({ tag, note: n }) => ({ tag, title: n.title, date: n.visit_date, type: n.note_type })),
+    record: lines,
     inTokens: msg.usage.input_tokens,
     outTokens: msg.usage.output_tokens,
     downgraded,

@@ -15,6 +15,9 @@ import { after } from "next/server";
 import { getActiveTraceId, startActiveObservation } from "@langfuse/tracing";
 import { langfuseEnabled } from "./langfuse-setup";
 import { flushLangfuse, insideTrace, newTrace } from "./langfuse";
+import { NS } from "./config";
+
+const READABLE = new Set([NS.trials, NS.pubmed]);
 
 export type TpufOp = "query" | "multi_query" | "write" | "metadata" | "warm" | "explain";
 
@@ -49,6 +52,10 @@ const TOP_N = 10;
 /** Run one turbopuffer call and record it in the logs and, when available, Langfuse. */
 export async function tpCall<T>(op: TpufOp, namespace: string, request: Record<string, unknown>, run: () => Promise<T>,
   opts: Opts<T>): Promise<T> {
+  // TrialScope Match only reads turbopuffer: the namespaces belong to the original TrialScope app. Writes, and any
+  // namespace outside the two shared corpora, are refused before a request is made.
+  if (op === "write" || op === "warm") throw new Error(`turbopuffer is read-only in this app (refused ${op} on ${namespace})`);
+  if (!READABLE.has(namespace)) throw new Error(`turbopuffer namespace ${namespace} is not used by this app`);
   const logged = loggable(op, request);
   const exec = async (observe?: (u: Record<string, unknown>) => void): Promise<T> => {
     const t0 = performance.now();

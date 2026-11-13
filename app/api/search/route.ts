@@ -24,12 +24,12 @@ export async function POST(req: Request) {
 
   const sources = parseSources(body.sources, body.scope);
 
-  // Either the selected patient's notes, or any mix of the shared corpora; the search page never mixes the two.
+  // The shared corpora in turbopuffer. Patient notes live in Supabase in this app and aren't searchable; the patient
+  // (from Supabase) only supplies age and sex when "match patient" is on.
   const targets: { namespace: string; filter: unknown[] | null }[] = [];
-  if (sources.includes("notes") && patient) targets.push({ namespace: NS.patient(patient.id), filter: buildFilters("notes", f) });
   if (sources.includes("pubmed")) targets.push({ namespace: NS.pubmed, filter: buildFilters("pubmed", f) });
   if (sources.includes("trials")) targets.push({ namespace: NS.trials, filter: buildFilters("trials", f, patient) });
-  if (!targets.length) return NextResponse.json({ error: "Pick a patient on the left to search their notes." }, { status: 400 });
+  if (!targets.length) return NextResponse.json({ error: "Pick abstracts, trials or both." }, { status: 400 });
 
   // One Langfuse trace per search (tagged "search"), with each namespace's turbopuffer call nested under it.
   after(flushLangfuse);
@@ -50,17 +50,17 @@ export async function POST(req: Request) {
   }
 }
 
-const ALL: Source[] = ["notes", "pubmed", "trials"];
+const ALL: Source[] = ["pubmed", "trials"];
 
 /**
- * The sources to search. Older links send `scope` instead: "patient", "literature", "trials" or "all"
+ * The sources to search. Older links send `scope` instead: "literature", "trials" or "all"
  * (and "fulltext", from when full-text articles were searchable, which now means abstracts).
  */
 function parseSources(sources: unknown, scope?: string): Source[] {
   if (Array.isArray(sources)) {
     const picked = ALL.filter((s) => sources.includes(s));
-    return picked.includes("notes") ? ["notes"] : picked;
+    return picked.length ? picked : ["pubmed", "trials"];
   }
-  return ({ patient: ["notes"], literature: ["pubmed"], fulltext: ["pubmed"], trials: ["trials"] } as Record<string, Source[]>)[scope ?? ""]
+  return ({ literature: ["pubmed"], fulltext: ["pubmed"], trials: ["trials"] } as Record<string, Source[]>)[scope ?? ""]
     ?? ["pubmed", "trials"];
 }

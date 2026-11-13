@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
-import { ArrowUpRight, FileText, Menu, Search, X } from "lucide-react";
+import { ArrowUpRight, FileText, Menu, Plus, Search, X } from "lucide-react";
 import type { Patient } from "@/lib/types";
 import { cx, Kbd, LogoMark } from "./ui";
 import { useCorpus } from "@/lib/use-corpus";
@@ -13,13 +13,10 @@ interface Ctx {
   patients: Patient[];
   patient: Patient | null;
   selectPatient: (id: string, go?: boolean) => void;
-  /** turbopuffer cache state of the selected patient's namespace. */
-  cache: CacheState;
   openPalette: () => void;
   copilotEnabled: boolean;
   readOnly: boolean;
 }
-type CacheState = { state: "checking" | "cold" | "warming" | "warm"; temperature: string | null } | null;
 
 const PatientCtx = createContext<Ctx | null>(null);
 export const useApp = () => {
@@ -45,7 +42,7 @@ export function AppShell({ patients, initialPatientId, copilotEnabled, readOnly,
   // The workspace URL is the source of truth when you're on a patient page.
   useEffect(() => {
     const m = pathname.match(/^\/patients\/([^/]+)/);
-    if (m && m[1] !== patientId) setPatientId(m[1]);
+    if (m && m[1] !== "new" && m[1] !== patientId) setPatientId(m[1]);
   }, [pathname, patientId]);
 
   const selectPatient = useCallback((id: string, go = true) => {
@@ -63,31 +60,9 @@ export function AppShell({ patients, initialPatientId, copilotEnabled, readOnly,
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // When a patient is selected, ask turbopuffer to warm their namespace, then check back until it reports warm.
-  const [cache, setCache] = useState<CacheState>(null);
-  useEffect(() => {
-    if (!patientId) { setCache(null); return; }
-    let stop = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    setCache({ state: "checking", temperature: null });
-    const check = async (warm: boolean, tries: number) => {
-      try {
-        const r = await fetch("/api/cache", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ patientId, warm }) }).then((x) => x.json());
-        if (stop || !r.state) return;
-        setCache({ state: r.state, temperature: r.temperature ?? null });
-        if ((r.state === "warming" || r.state === "cold") && tries > 0) timer = setTimeout(() => check(false, tries - 1), 2500);
-      } catch {
-        if (!stop) setCache(null);
-      }
-    };
-    check(true, 1); // warm, then look once more a moment later
-    return () => { stop = true; clearTimeout(timer); };
-  }, [patientId]);
-
   const ctx = useMemo<Ctx>(() => ({
-    patients, patient, selectPatient, cache, openPalette: () => setPaletteOpen(true), copilotEnabled, readOnly,
-  }), [patients, patient, selectPatient, cache, copilotEnabled, readOnly]);
+    patients, patient, selectPatient, openPalette: () => setPaletteOpen(true), copilotEnabled, readOnly,
+  }), [patients, patient, selectPatient, copilotEnabled, readOnly]);
 
   return (
     <PatientCtx.Provider value={ctx}>
@@ -110,7 +85,7 @@ export function AppShell({ patients, initialPatientId, copilotEnabled, readOnly,
 
 function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const corpus = useCorpus();
-  const { patients, patient, selectPatient, openPalette, cache } = useApp();
+  const { patients, patient, selectPatient, openPalette, readOnly } = useApp();
   const pathname = usePathname();
   const [panel, setPanel] = useState<"All" | "Oncology" | "Cardiology">("All");
   const [filter, setFilter] = useState("");
@@ -148,8 +123,13 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
       </nav>
 
       <div className="mt-6 flex items-center justify-between px-5">
-        <h2 className="text-[13px] font-semibold text-ink">Patients</h2>
-        <span className="text-xs text-slate tabular-nums">{shown.length}</span>
+        <h2 className="text-[13px] font-semibold text-ink">Patients <span className="font-normal text-slate tabular-nums">{shown.length}</span></h2>
+        {!readOnly && (
+          <Link href="/patients/new" onClick={onClose}
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12.5px] font-medium text-accent hover:bg-accent-soft">
+            <Plus size={14} />New
+          </Link>
+        )}
       </div>
       <div className="mt-2 flex gap-1 px-4">
         {(["All", "Oncology", "Cardiology"] as const).map((s) => (
@@ -178,7 +158,6 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
                   <span className={cx("truncate text-[13.5px] font-semibold", selected ? "text-notes" : "text-ink")}>{p.name}</span>
                   {selected
                     ? <span className="flex shrink-0 items-center gap-1.5">
-                        <CacheDot cache={cache} />
                         <span className="rounded bg-notes px-1.5 py-px text-[10.5px] font-semibold tracking-wide text-white uppercase">Selected</span>
                       </span>
                     : <span className="text-xs text-slate tabular-nums">{p.age}</span>}
@@ -199,28 +178,11 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
       </ul>
       <Account />
       <div className="border-t border-line px-5 py-3 text-[11.5px] leading-relaxed text-slate">
-        {corpus.pubmed && corpus.trials ? `${corpus.pubmed.rows.toLocaleString()} abstracts and ${corpus.trials.rows.toLocaleString()} trials on turbopuffer. ` : ""}
+        Patients and notes in Supabase Postgres.{" "}
+        {corpus.pubmed && corpus.trials ? `${corpus.pubmed.rows.toLocaleString()} abstracts and ${corpus.trials.rows.toLocaleString()} trials on turbopuffer. ` : "Abstracts and trials on turbopuffer. "}
         Personal learning project. Synthetic patients, not for clinical use.
       </div>
     </aside>
-  );
-}
-
-const CACHE_TEXT = {
-  checking: "Checking turbopuffer's cache for this patient's namespace",
-  cold: "Cold: this patient's namespace is only in object storage, so the first search reads from there",
-  warming: "Warming: turbopuffer is loading this patient's namespace into its cache",
-  warm: "Warm: this patient's namespace is cached, so searches skip object storage",
-};
-
-/** Cache state of the selected patient's namespace: grey cold, pulsing while warming, green when warm. */
-function CacheDot({ cache }: { cache: CacheState }) {
-  if (!cache) return null;
-  const label = CACHE_TEXT[cache.state] + (cache.temperature ? ` (turbopuffer reports "${cache.temperature}")` : "");
-  return (
-    <span title={label} aria-label={label} role="img"
-      className={cx("size-2 rounded-full",
-        cache.state === "warm" ? "bg-trials" : cache.state === "warming" ? "animate-pulse bg-notes" : cache.state === "cold" ? "bg-slate/50" : "animate-pulse bg-line-2")} />
   );
 }
 

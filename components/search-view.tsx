@@ -27,7 +27,8 @@ type Area = "notes" | "literature";
 /** Sources from the URL: `in=notes` or `in=pubmed,trials`; older links use `scope`. */
 function initialSources(params: URLSearchParams): { area: Area; lit: Source[] } {
   const inParam = params.get("in");
-  if (inParam === "notes" || params.get("scope") === "patient") return { area: "notes", lit: LITERATURE };
+  // Notes aren't searchable in this app (they live in Supabase), so old notes links open the literature search.
+  if (inParam === "notes" || params.get("scope") === "patient") return { area: "literature", lit: LITERATURE };
   const picked = (inParam ?? "").split(",").filter((s): s is Source => LITERATURE.includes(s as Source));
   if (picked.length) return { area: "literature", lit: picked };
   // "fulltext" is from when full-text articles were searchable; it now opens abstracts.
@@ -111,7 +112,6 @@ export function SearchView() {
   const idle = Object.entries(groups).filter(([s, n]) => n && !sources.includes(s as Source)).map(([s]) => LIT_LABEL[s as Source]);
   const idleNames = idle.map((n) => n.toLowerCase());
 
-  const notesLabel = patient ? `${patient.name.split(" ")[0]}'s notes` : "Patient notes";
   const corpusTotal = ["pubmed", "trials"].reduce((n, k) => n + (stats[k]?.bytes ?? 0), 0);
 
   return (
@@ -120,11 +120,11 @@ export function SearchView() {
         {!q && (
           <div className="mb-8 max-w-[760px]">
             <h1 className="font-display text-[clamp(44px,6.5vw,84px)] leading-[0.95] tracking-tight text-ink text-balance">
-              Search the chart or <em className="italic text-slate">the literature</em>.
+              Search trials and <em className="italic text-slate">the literature</em>.
             </h1>
             <p className="mt-4 max-w-[62ch] text-[16px] leading-relaxed text-slate">
-              A patient’s own notes, or PubMed and clinical trials, ranked by turbopuffer. Exact terms
-              match on keywords, questions match on meaning.
+              PubMed and ClinicalTrials.gov, ranked by turbopuffer. Exact terms match on keywords, questions
+              match on meaning. Pick a patient to filter trials by their age and sex from Supabase.
             </p>
           </div>
         )}
@@ -142,12 +142,6 @@ export function SearchView() {
         <CorpusLine area={area} patient={patient} stats={stats} total={corpusTotal} />
 
         <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3">
-          <Segmented label="Search" value={area} onChange={(a) => setSources(({ lit: cur }) => ({ area: a, lit: cur }))} options={[
-            { value: "notes", label: notesLabel, hint: patient
-              ? `Only ${patient.name}'s chart notes, in their own turbopuffer namespace (ts-patient-${patient.id}). Synthetic, written by a script.`
-              : "Pick a patient on the left to search their chart notes. Each patient has their own turbopuffer namespace." },
-            { value: "literature", label: "Literature and trials", hint: "Public medical literature and trials. Pick abstracts, trials or both." },
-          ]} />
           {area === "literature" && (
             <div role="group" aria-label="Sources" className="inline-flex flex-wrap gap-1.5">
               {LITERATURE.map((s) => (
