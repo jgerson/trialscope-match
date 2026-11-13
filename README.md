@@ -38,10 +38,11 @@ shared corpora from turbopuffer and keeps its own patient data in Supabase.
 | Eligibility checklist | record and notes | | criteria, in parallel with Supabase |
 | Copilot: `get_patient_record`, `get_lab_history`, `read_patient_notes` | yes | | |
 | Copilot: `search` (trials, PubMed) | | yes | |
+| Copilot: `get_trial_criteria` | | | up to five trials, in parallel |
 
 Every Postgres query is logged as `{"postgres":"<label>","ms":…,"rows":…}` in the runtime logs, next to the existing
 `{"tpuf":…}` lines, and the UI says which database answered: the record panel shows its query count and time, and
-each copilot step carries a Supabase or turbopuffer label.
+each copilot step carries a Supabase, turbopuffer or ClinicalTrials.gov label.
 
 ## Setup
 
@@ -90,7 +91,10 @@ project from the Supabase dashboard before a demo.
   statement, the diff and the time. Notes aren't searchable in this app (see Known limits).
 - **Copilot tools.** `get_patient_record` returns the record as tagged lines (`[R1]`, `[R2]`…), `get_lab_history`
   returns one lab over time (`[H1]`…), `read_patient_notes` reads the notes, and `search` covers trials and PubMed.
-  The system prompt starts trial matching from the record, not from reading notes.
+  `get_trial_criteria` reads the full inclusion and exclusion criteria for up to five trials live from
+  ClinicalTrials.gov (search results carry only a summary), keeping each trial's `[T]` tag.
+  The system prompt starts trial matching from the record, not from reading notes, then checks the top trials'
+  criteria against it.
 - **Eligibility checklist** gets the structured record as tagged lines, so criteria like "eGFR ≥ 30" or "no
   anticoagulants" can be marked met or failed citing the exact lab or medication row, where before they were often
   unknown. Results are shown, not stored.
@@ -207,7 +211,7 @@ npm run dev                      # http://localhost:3000
   with strong and with eventual consistency (traced in Langfuse as `explain-search`).
 - **Patient workspace** (`/patients/[id]`): the record panel, the notes list and a markdown editor with read and
   edit modes, and the copilot. Record and notes load from Supabase in parallel.
-- **Copilot**: Claude with four tools (above). Answers stream in, each tool call is listed as it happens with the
+- **Copilot**: Claude with five tools (above). Answers stream in, each tool call is listed as it happens with the
   database it hit, and `[N1]`, `[P1]`, `[T1]` tags open source cards; `[R]` and `[H]` tags point at record rows listed
   in the step.
   Each step expands to show the model's reasoning, the exact tool call, the filters turbopuffer actually applied,

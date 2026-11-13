@@ -1,9 +1,11 @@
-// The copilot: Claude with four tools, streamed to the browser as NDJSON events. Three read the patient from Supabase
-// Postgres (record, lab history, notes); one searches the shared corpora in turbopuffer (PubMed, trials).
+// The copilot: Claude with five tools, streamed to the browser as NDJSON events. Three read the patient from Supabase
+// Postgres (record, lab history, notes); one searches the shared corpora in turbopuffer (PubMed, trials); one reads
+// trials' full eligibility criteria live from ClinicalTrials.gov.
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { getVercelOidcToken } from "@vercel/oidc";
 import { config, NS } from "./config";
+import { getTrial, NCT_RE } from "./ctgov";
 import { getRecord, labHistory, listNotes, recordLines } from "./patients";
 import { tracedFetch } from "./traced-fetch";
 import { buildFilters, search } from "./tpuf";
@@ -59,7 +61,24 @@ const TOOLS: Anthropic.Tool[] = [
       required: ["sources", "query"],
     },
   },
+  {
+    name: "get_trial_criteria",
+    description:
+      "The full, current eligibility criteria (inclusion and exclusion), age limits and sex for up to 5 trials, read live " +
+      "from ClinicalTrials.gov by NCT id. Search results only carry a summary; call this for the most promising trials " +
+      "before saying whether the patient fits. A trial already returned by a search keeps its [T] tag.",
+    input_schema: {
+      type: "object",
+      properties: { nct_ids: { type: "array", items: { type: "string" }, description: "e.g. ['NCT01234567'], at most 5" } },
+      required: ["nct_ids"],
+    },
+  },
 ];
+
+// Criteria are cut to this many characters per trial (about 2,500 tokens), so five trials stay a modest part of the
+// context. Exclusion criteria come after inclusion, so a lower cap would drop the part that rules patients out.
+const CRITERIA_MAX = 10_000;
+const CRITERIA_TRIALS_MAX = 5;
 
 const SYSTEM = (patient: Patient | null) => `You are the TrialScope copilot, helping a physician with their patient's record \
 and notes (in the clinic's Postgres database), PubMed and ClinicalTrials.gov (searched in turbopuffer). All patients \
@@ -73,8 +92,10 @@ never the patient. Don't exclude or question a note because of who wrote it.
 get_patient_record and get_lab_history. Notes add context the record lacks. If the record and a note disagree, say so.
 - For trial matching, first call get_patient_record, then search trials with filters (usually status Recruiting or Not \
 yet recruiting, the patient's country, and match_patient_age_sex), using the diagnosis, stage and biomarkers in the query. \
-When a trial's summary names a requirement the record answers (a lab threshold, a prior or current drug), say whether \
-the record meets it and cite the [R] line.
+Then call get_trial_criteria once for the 3 to 5 most promising trials and compare their inclusion and exclusion \
+criteria with the record: prior and current therapies, ECOG, labs, brain metastases, age. For each requirement the \
+record answers, say whether the record meets it and cite both the [R] (or [H], [N]) line and the trial's [T] tag. Name \
+the requirements that would exclude the patient, and the ones the record can't answer.
 - Say plainly that eligibility needs physician review against the full protocol. Do not give treatment advice.
 - Only state eligibility details that appear in the tool results. If a fit depends on something the results don't show, \
 say it needs checking instead of assuming it.
@@ -93,8 +114,9 @@ export type StepSearch = Omit<SearchResponse, "hits" | "runs"> & {
 export type CopilotEvent =
   | {
       type: "step"; tool: string; input: Record<string, unknown>; results: number; ms: number;
-      // Which database answered: the patient tools read Supabase Postgres, search reads turbopuffer.
-      store: "supabase" | "turbopuffer";
+      // Which source answered: the patient tools read Supabase Postgres, search reads turbopuffer, and
+      // get_trial_criteria reads ClinicalTrials.gov.
+      store: "supabase" | "turbopuffer" | "clinicaltrials.gov";
       returned: { tag: string; title: string; key: string }[]; reasoning?: string;
       // Search steps only: the filters each source actually applied, and the full ranking for the Explain panel.
       filters?: { source: string; filters: string[] }[]; search?: StepSearch;
@@ -152,7 +174,7 @@ function reasoningOf(content: Anthropic.ContentBlock[]): string | undefined {
 // Langfuse observation names for the tools. Names are an API for dashboards and evaluators: keep them stable.
 const TOOL_OBSERVATION: Record<string, string> = {
   search: "search-sources", read_patient_notes: "read-patient-notes", get_patient_record: "read-patient-record",
-  get_lab_history: "read-lab-history",
+  get_lab_history: "read-lab-history", get_trial_criteria: "read-trial-criteria",
 };
 
 /**
@@ -267,6 +289,35 @@ async function copilotLoop(
       });
       emit({ type: "step", tool: name, input, store: "supabase", results: notes.length, ms: performance.now() - t1, returned, reasoning });
       return out.length ? `Notes for ${patient.name} (patient ${patient.id}), newest first:\n\n${out.join("\n\n")}` : "No notes.";
+    }
+    if (name === "get_trial_criteria") {
+      const ids = [...new Set(((input.nct_ids as unknown[]) ?? []).map((x) => String(x).trim().toUpperCase()))];
+      const valid = ids.filter((x) => NCT_RE.test(x)).slice(0, CRITERIA_TRIALS_MAX);
+      if (!valid.length) return "Give one to five NCT ids, like NCT01234567.";
+      const fetched = await Promise.allSettled(valid.map((nct) => getTrial(nct)));
+      const returned: { tag: string; title: string; key: string }[] = [];
+      const out = valid.map((nct, i) => {
+        const r = fetched[i];
+        if (r.status === "rejected") return `${nct}: couldn't read it from ClinicalTrials.gov (${(r.reason as Error).message}).`;
+        const trial = r.value;
+        if (!trial) return `${nct}: ClinicalTrials.gov has no such study.`;
+        // Reuse the tag a search gave this trial; otherwise tag it here, so the answer can cite it either way.
+        const known = Object.values(cites).find((h) => h.kind === "trials" && h.code === nct);
+        const h: Hit = known ?? {
+          key: `clinicaltrials.gov:${nct}`, id: nct, kind: "trials", namespace: "clinicaltrials.gov", title: trial.title,
+          url: `https://clinicaltrials.gov/study/${nct}`, meta: [trial.status, trial.phases.join(", ")].filter(Boolean), code: nct,
+          snippet: trial.criteria.slice(0, 420), nsRank: 0, overall: 0, fused: 0, rrf: 0, vector: null, bm25: null, terms: [], raw: {},
+        };
+        const t = tag(h);
+        returned.push({ tag: t, title: trial.title, key: h.key });
+        const criteria = !trial.criteria ? "(ClinicalTrials.gov lists no eligibility criteria for this study.)"
+          : trial.criteria.length > CRITERIA_MAX ? `${trial.criteria.slice(0, CRITERIA_MAX)}… (cut at ${CRITERIA_MAX} characters)` : trial.criteria;
+        return `[${t}] ${nct} | ${trial.title}\nStatus: ${trial.status} | Phases: ${trial.phases.join(", ") || "n/a"} | ` +
+          `Ages: ${trial.minAge} to ${trial.maxAge} | Sex: ${trial.sex}\nEligibility criteria:\n${criteria}`;
+      });
+      updateActiveObservation({ metadata: { store: "clinicaltrials.gov", requested: ids.length, read: returned.length } }, { asType: "tool" });
+      emit({ type: "step", tool: name, input, store: "clinicaltrials.gov", results: returned.length, ms: performance.now() - t1, returned, reasoning });
+      return out.join("\n\n");
     }
     const sources = (input.sources as string[]) ?? [];
     const targets: { namespace: string; filter: unknown[] | null }[] = [];
