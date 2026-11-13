@@ -30,5 +30,9 @@ export const config = {
     "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
     // Always run for API routes.
     "/(api|trpc)(.*)",
+    // Always run for Clerk's frontend API proxy. With a production key on a vercel.app address, Clerk serves its
+    // scripts from /__clerk on the app's own origin, and those .js paths would otherwise be skipped above (a 404, so
+    // the sign-in form never loads).
+    "/__clerk/(.*)",
   ],
 };
