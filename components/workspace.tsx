@@ -7,6 +7,7 @@ import { Check, Loader2, Plus } from "lucide-react";
 import type { Note, Patient, PatientRecord, WriteReport } from "@/lib/types";
 import { useApp } from "./app-shell";
 import { Copilot } from "./copilot";
+import { PatientSearch } from "./patient-search";
 import { RecordPanel } from "./record-panel";
 import { indexPhrase, SaveDetails, useIndexStatus } from "./save-details";
 import { cx } from "./ui";
@@ -72,6 +73,9 @@ export function Workspace({ patient, initialRecord, initialNotes, loadMs }: {
 
   return (
     <div className="mx-auto grid max-w-[1600px] gap-6 px-5 py-8 sm:px-8 lg:px-10 2xl:grid-cols-[250px_minmax(0,1fr)_420px] xl:grid-cols-[minmax(0,1fr)_400px]">
+      {/* search across all patients, above this patient */}
+      <div className="2xl:col-span-3 xl:col-span-2"><PatientSearch /></div>
+
       {/* patient header spans the row */}
       <header className="2xl:col-span-3 xl:col-span-2">
         <p className="text-[13px] text-slate">{patient.age}-year-old {patient.sex.toLowerCase()}, {patient.city}, {patient.state}</p>

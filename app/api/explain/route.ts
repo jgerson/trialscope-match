@@ -18,7 +18,7 @@ export async function POST(req: Request) {
   if (user instanceof Response) return user;
   const body = (await req.json()) as { namespace?: string; request?: Record<string, unknown> };
   const namespace = String(body.namespace ?? "");
-  if (!namespace.startsWith(NS.prefix)) return NextResponse.json({ error: "Unknown namespace." }, { status: 400 });
+  if (!namespace.startsWith(NS.prefix) && namespace !== NS.notes) return NextResponse.json({ error: "Unknown namespace." }, { status: 400 });
   const raw = body.request ?? {};
   const request = Array.isArray(raw.queries) ? { queries: (raw.queries as unknown[]).slice(0, 2).map(clean) } : clean(raw);
   if (!Object.keys(request).length) return NextResponse.json({ error: "Nothing to explain." }, { status: 400 });

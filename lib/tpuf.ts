@@ -1,5 +1,5 @@
-// turbopuffer access, read-only: search modes, multi-namespace merge, corpus stats, facets and query plans.
-// Only the shared corpora (ts-trials, ts-pubmed) are read; patients and notes live in Supabase (lib/patients.ts).
+// turbopuffer reads: search modes, multi-namespace merge, corpus stats, facets and query plans. Searches the shared
+// corpora (ts-trials, ts-pubmed) and this app's match-notes, which lib/note-index.ts keeps in sync with Supabase.
 import "server-only";
 import Turbopuffer from "@turbopuffer/turbopuffer";
 import { config, NS, RRF_K } from "./config";
@@ -28,7 +28,7 @@ export function kindOf(namespace: string): Kind {
 const DISPLAY: Record<Kind, string[]> = {
   trials: ["title", "summary", "nct_id", "status", "phases", "conditions", "countries", "sponsor", "start_year"],
   pubmed: ["title", "abstract", "pmid", "journal", "year", "pub_types", "topic"],
-  notes: ["title", "body", "note_type", "visit_date", "author"],
+  notes: ["title", "body", "note_type", "visit_date", "author", "patient_id"],
 };
 
 // ------------------------------------------------------------------ filters
