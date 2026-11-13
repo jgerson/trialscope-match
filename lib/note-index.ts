@@ -69,10 +69,12 @@ export async function indexNotes(opts: { ids?: string[]; limit?: number } = {}):
       await tpCall("write", NS.notes, request,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         () => tp().namespace(NS.notes).write(request as any), { label: "index-notes" });
+      // Versions travel as text and are cast in SQL: a timestamptz[] parameter would go through JavaScript Dates, which
+      // drop the microseconds, and the "unchanged since" check would never match.
       const done = await timed("mark-notes-indexed", () => sql`
-        update notes n set indexed_at = x.version, index_error = null, index_attempts = 0
-        from unnest(${rows.map((r) => r.id)}::text[], ${rows.map((r) => r.version)}::timestamptz[]) as x(id, version)
-        where n.id = x.id and n.updated_at = x.version`);
+        update notes n set indexed_at = x.version::timestamptz, index_error = null, index_attempts = 0
+        from unnest(${rows.map((r) => r.id)}::text[], ${rows.map((r) => r.version)}::text[]) as x(id, version)
+        where n.id = x.id and n.updated_at = x.version::timestamptz`);
       indexed = done.count;
       skipped = rows.length - done.count;
     } catch (e) {
@@ -94,13 +96,14 @@ export interface IndexStatus { id: string; savedAt: string; indexedAt: string | 
 
 /** Where one note stands: saved at updated_at, and whether that version has reached turbopuffer yet. */
 export async function noteIndexStatus(id: string, patientId: string): Promise<IndexStatus | null> {
-  const rows = await db()<{ saved: Date; indexed: Date | null; index_error: string | null; index_attempts: number }[]>`
-    select updated_at as saved, indexed_at as indexed, index_error, index_attempts
+  // Compared in SQL: JavaScript Dates would drop the microseconds.
+  const rows = await db()<{ saved: Date; indexed_at: Date | null; current: boolean; index_error: string | null; index_attempts: number }[]>`
+    select updated_at as saved, indexed_at, coalesce(indexed_at >= updated_at, false) as current, index_error, index_attempts
     from notes where id = ${id} and patient_id = ${patientId}`;
   const r = rows[0];
   if (!r) return null;
   return {
-    id, savedAt: new Date(r.saved).toISOString(), indexedAt: r.indexed ? new Date(r.indexed).toISOString() : null,
-    indexed: !!r.indexed && r.indexed >= r.saved, error: r.index_error, attempts: r.index_attempts,
+    id, savedAt: new Date(r.saved).toISOString(), indexedAt: r.indexed_at ? new Date(r.indexed_at).toISOString() : null,
+    indexed: r.current, error: r.index_error, attempts: r.index_attempts,
   };
 }
