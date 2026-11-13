@@ -1,9 +1,10 @@
-// Runs before every request: everything except the sign-in page needs a signed-in user. There is no sign-up page;
+// Runs before every request: everything except the sign-in page (and the cron-called indexing sweep) needs a signed-in user. There is no sign-up page;
 // accounts are created in Clerk's dashboard (the instance is invite-only).
 // Pages redirect to the app's /sign-in; API routes get a 404 from auth.protect() (and a 401 from their own check).
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
-const isPublic = createRouteMatcher(["/sign-in(.*)"]);
+// /api/index-notes is called by Supabase's pg_cron, not a signed-in user; it checks its own shared secret.
+const isPublic = createRouteMatcher(["/sign-in(.*)", "/api/index-notes"]);
 
 // The production origins session tokens must come from, e.g. "https://match.trialscope.space". Unset (the default for a
 // new deployment on a vercel.app address with Clerk's development keys), Clerk's default check applies.

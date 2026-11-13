@@ -19,16 +19,20 @@ export const config = {
   // system prompt, tools and earlier turns; cached, those cost a fraction of the input price on the next call.
   promptCache: ["1", "true", "yes"].includes((process.env.COPILOT_PROMPT_CACHE ?? "").toLowerCase()),
   embedModel: "voyage/voyage-4-lite",
+  // Shared secret for /api/index-notes, the once-a-minute indexing sweep that Supabase's pg_cron calls.
+  indexNotesSecret: process.env.INDEX_NOTES_SECRET ?? "",
 };
 
 export const copilotEnabled = Boolean(config.anthropicKey || config.gatewayKey || config.onVercel);
 
-// The original TrialScope app's turbopuffer namespaces. This app only reads the two shared corpora; patients and their
-// notes live in Supabase (see lib/patients.ts).
+// turbopuffer namespaces. ts-trials and ts-pubmed are the original TrialScope app's shared corpora, read only.
+// match-notes is this app's own: every note, synced from Supabase (lib/note-index.ts), with patient_id as a filter.
+// Patients and notes themselves live in Supabase (see lib/patients.ts).
 export const NS = {
   prefix: "ts-",
   trials: "ts-trials",
   pubmed: "ts-pubmed",
+  notes: "match-notes",
 };
 
 export const RRF_K = 60;

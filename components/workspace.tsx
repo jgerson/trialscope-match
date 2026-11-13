@@ -8,7 +8,7 @@ import type { Note, Patient, PatientRecord, WriteReport } from "@/lib/types";
 import { useApp } from "./app-shell";
 import { Copilot } from "./copilot";
 import { RecordPanel } from "./record-panel";
-import { SaveDetails } from "./save-details";
+import { indexPhrase, SaveDetails, useIndexStatus } from "./save-details";
 import { cx } from "./ui";
 
 const TYPES = ["Visit note", "Result", "Phone call", "Treatment plan", "Other"];
@@ -37,6 +37,8 @@ export function Workspace({ patient, initialRecord, initialNotes, loadMs }: {
   const original = useMemo(() => notes.find((n) => n.id === selId), [notes, selId]);
   const dirty = !original || original.title !== draft.title || original.body !== draft.body ||
     original.note_type !== draft.note_type || original.visit_date !== draft.visit_date;
+  const index = useIndexStatus(saved ? draft.id : undefined, patient.id, saved?.at);
+  const indexed = indexPhrase(index);
 
   useEffect(() => {
     setNotes(initialNotes); setSelId(initialNotes[0]?.id ?? ""); setDraft(initialNotes[0] ?? blank(me));
@@ -131,6 +133,7 @@ export function Workspace({ patient, initialRecord, initialNotes, loadMs }: {
               {saved && !dirty && (
                 <span className="inline-flex items-center gap-1.5 text-[12.5px] text-accent-strong">
                   <Check size={14} />{saved.report.kind === "update" ? "Updated" : "Inserted"} in Postgres in {Math.round(saved.report.writeMs)} ms
+                  {indexed && <span className="text-slate">· {indexed}</span>}
                   <button type="button" onClick={() => setShowDetails((v) => !v)} aria-expanded={showDetails}
                     className="ml-1 font-semibold text-ink-2 underline underline-offset-2 hover:text-accent">
                     {showDetails ? "Hide details" : "Details"}
@@ -168,7 +171,7 @@ export function Workspace({ patient, initialRecord, initialNotes, loadMs }: {
           )}
         </div>
         {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
-        {saved && showDetails && !dirty && <SaveDetails report={saved.report} note={draft} />}
+        {saved && showDetails && !dirty && <SaveDetails report={saved.report} note={draft} index={index} />}
         </div>
       </section>
 

@@ -3,6 +3,7 @@ import { startActiveObservation } from "@langfuse/tracing";
 import { flushLangfuse, newTrace } from "@/lib/langfuse";
 import { randomUUID } from "node:crypto";
 import { config } from "@/lib/config";
+import { indexNotes } from "@/lib/note-index";
 import { getPatient, saveNote } from "@/lib/patients";
 import { displayName, requireUserId } from "@/lib/session";
 import type { Note } from "@/lib/types";
@@ -37,6 +38,10 @@ export async function POST(req: Request) {
         return r;
       }, { asType: "span" }));
     console.log(JSON.stringify({ note: res.kind, table: res.table, id: res.id, writeMs: Math.round(res.writeMs) }));
+    // Copy the saved version into turbopuffer once the response has gone out. If this fails, the note stays marked as
+    // waiting in Postgres and the once-a-minute sweep (/api/index-notes) retries it.
+    after(() => indexNotes({ ids: [res.id] }).catch((e) =>
+      console.log(JSON.stringify({ noteIndex: "after-save", id: res.id, error: (e as Error).message.slice(0, 300) }))));
     return NextResponse.json({ note: clean, ...res });
   } catch (e) {
     return NextResponse.json({ error: `Save failed: ${(e as Error).message}` }, { status: 502 });
