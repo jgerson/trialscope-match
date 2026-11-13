@@ -29,7 +29,15 @@ export function db(): postgres.Sql {
   return _sql;
 }
 
-export interface QueryTiming { label: string; ms: number; rows: number }
+/** One query as it ran: its label, time, row count and the SQL Postgres received (parameters as $1, $2…). */
+export interface QueryTiming { label: string; ms: number; rows: number; sql?: string }
+
+/** The statement without the indentation it had in the source file. */
+function tidySql(s: string): string {
+  const lines = s.replace(/^\s*\n/, "").replace(/\s+$/, "").split("\n");
+  const indent = Math.min(...lines.filter((l) => l.trim()).map((l) => l.match(/^ */)![0].length));
+  return lines.map((l) => l.slice(indent)).join("\n");
+}
 
 /** Run one query and record how long it took; one JSON line per query in the runtime logs, like the turbopuffer calls. */
 export async function timed<T extends readonly unknown[]>(label: string, run: () => Promise<T>,
@@ -38,7 +46,9 @@ export async function timed<T extends readonly unknown[]>(label: string, run: ()
   try {
     const rows = await run();
     const ms = Math.round((performance.now() - t0) * 10) / 10;
-    log?.push({ label, ms, rows: rows.length });
+    // postgres.js attaches the statement it sent to every result; parameters travel separately and aren't included.
+    const text = (rows as unknown as { statement?: { string?: string } }).statement?.string;
+    log?.push({ label, ms, rows: rows.length, ...(text ? { sql: tidySql(text) } : {}) });
     console.log(JSON.stringify({ postgres: label, ms, rows: rows.length }));
     return rows;
   } catch (e) {

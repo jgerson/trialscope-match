@@ -61,7 +61,7 @@ export interface PatientRecord {
   medications: Medication[];
   latest: Observation[];
   /** Every SQL statement that built this record, for the "From Supabase" line and the copilot step. */
-  queries: { label: string; ms: number; rows: number }[];
+  queries: { label: string; ms: number; rows: number; sql?: string }[];
 }
 
 export interface Note {
