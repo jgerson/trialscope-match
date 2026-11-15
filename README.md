@@ -333,10 +333,51 @@ was scheduled with, so locally a failed indexing call waits until a later save o
 - Each document has one `text` attribute that is both BM25-indexed and natively embedded by
   turbopuffer (`voyage/voyage-4-lite`), so one attribute serves every mode. `match-notes` is set up the same way
   (title and body as `text`), so notes search works exactly like trial and abstract search.
-- **Hybrid** sends one `multiQuery` with a vector subquery and a BM25 subquery, then fuses the two
-  ranked lists with reciprocal rank fusion (k = 60, the same formula as turbopuffer's
-  `rerank_by: ["RRF"]`), keeping each list's rank for the explainer.
+- **Hybrid** sends one `multiQuery` with a vector subquery and a BM25 subquery, fused with
+  reciprocal rank fusion (k = 60). A **Fused by** toggle picks where:
+  - **turbopuffer** (default): the request carries `rerank_by: ["RRF"]` and `limit`, and turbopuffer
+    returns one fused list with the RRF score in `$dist`. When you open Explain (or with every search,
+    if `FUSION_VERIFY=always`), the app fetches the two unfused lists, recomputes RRF itself and compares: the Explain panel shows a ✓ (or the first
+    position that differs) per namespace, plus both scores for each result. Positions where two
+    documents have exactly equal scores count as ties, since turbopuffer doesn't document its
+    tie-break. `FUSION_VERIFY=off` turns the check (and the per-list ranks) off.
+  - **In app**: turbopuffer returns the two lists and the app fuses them, as before.
+- **Vector: Approximate | Exact** picks how the vector subquery runs: `["text", "ANN", ["Embed", q]]` (the index,
+  fast, ~90–95% recall) or `["text", "kNN", ["Embed", q]]` (every document that passes the filters, always the true
+  nearest neighbors). If kNN is rejected it falls back to ANN and says so. In Explain, **Check ANN accuracy** asks
+  turbopuffer's recall endpoint for this query's recall (`rank_by` + filters, `num: 1`) and for a 20-search sample of
+  the namespace, and times the same vector query both ways, listing anything only exact search found. The copilot can
+  set `exact_vector`.
+- **Model rerank** (a third **Fused by** option, and the copilot's `rerank: true`): the same multi-query with
+  `rerank_by: { model, attribute: "text", query }` instead of RRF. Each subquery returns 20/30/40 candidates (with
+  `text` for the model to read), turbopuffer scores them with the model, and the top `topK` come back. The unfused
+  lists are fetched in parallel, so each result shows where RRF would have put it (▲/▼ on the card, the RRF score in
+  Explain) and each source reports how many positions changed and the extra server time. Boosts are off in this mode
+  (the model rescores everything). If the model call fails (not enabled in your region, unknown model), the search
+  falls back to turbopuffer RRF and says so. `RERANK_MODEL` (default `zeroentropy/zerank-2`) and `RERANK_CANDIDATES`.
+- **Group by** arranges the shown results into sections (sponsor/journal, status/topic, year, phase/study type,
+  condition, source) without changing ranks, so it works after any fusion, including the reranker. **At most N per**
+  asks turbopuffer to diversify instead: `limit: { total, per: { attributes: [sponsor | journal | status | topic |
+  year], limit: N } }` on each subquery, applied before fusion or reranking. The copilot can set it with
+  `max_per_source_group`.
+- **Ranking boosts** (the **Ranking** button, and the copilot's `ranking` tool field) are optional and off by
+  default. Each one adds to the keyword (BM25) subquery's score without filtering anything out:
+  `Sum[ Saturate(BM25, midpoint 6), w × favor-recruiting, w × recency steps, w × evidence level, w × late phase,
+  w × fits-the-patient ]`, where each clause is a turbopuffer *rank by filter* (1 if it matches, 0 if not) and `w` is
+  Low/Medium/High = 0.15/0.3/0.6 on the 0–1 relevance scale. Recency is four `year ≥ t` steps (0.5 at the chosen
+  midpoint year, 0.75 a span later). A `ContainsAnyToken` filter keeps boosts from pulling in documents with no query
+  words, since turbopuffer drops zero-score rows. The vector subquery is unchanged, so in hybrid mode RRF fuses the
+  boosted keyword list with it as usual. `compute_attributes` returns each part per result for the Explain panel. If
+  turbopuffer rejects a boosted request (400), the search retries without the breakdown, then as plain BM25, and says
+  so. Settings live in the URL (`?rk=recruiting2.recent2-2020-4`). `BOOST_BM25_MIDPOINT` changes the BM25 midpoint.
+- **Several sources** are queried in parallel and merged by rank. That merge always runs in the
+  app, because a multi-query (and so turbopuffer's RRF) covers one namespace.
 - **Several sources** are queried in parallel and merged by rank.
+- The same fusion, rank-verification and accuracy tools apply to the **notes search across patients** over
+  `match-notes` (its Explain dialog checks turbopuffer's RRF on demand). Faceted refinement and ranking boosts are on the
+  trials and abstracts search page; the notes search keeps its Supabase record filters.
+- Every new request still goes through `tpCall`, including recall evaluations (op `recall`), so reads stay limited
+  to `ts-trials`, `ts-pubmed` and `match-notes`.
 
 ## Data
 
