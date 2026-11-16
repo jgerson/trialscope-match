@@ -7,6 +7,7 @@ import { Check, Database, Loader2, Plus, Search, X } from "lucide-react";
 import type { AttrFilter, PatientSearchResult, SearchMode } from "@/lib/patient-search";
 import type { Hit } from "@/lib/types";
 import { ExplainDialog } from "./explain";
+import { warmUp } from "@/lib/use-warmup";
 import { cx, highlight, Segmented } from "./ui";
 
 type Options = { diagnoses: string[]; biomarkers: string[]; medications: string[]; labs: string[] };
@@ -103,7 +104,7 @@ export function PatientSearch() {
       <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (canRun) run(); }}>
         <label className="flex min-w-[220px] flex-1 items-center gap-2 rounded-lg border border-line bg-paper px-3 py-2 focus-within:ring-1 focus-within:ring-ink">
           <Search size={15} className="text-slate" aria-hidden />
-          <input value={q} onChange={(e) => setQ(e.target.value)} disabled={mode === "attributes"}
+          <input value={q} onChange={(e) => setQ(e.target.value)} onFocus={warmUp} disabled={mode === "attributes"}
             placeholder={mode === "attributes" ? "Attributes only: add filters below" : "Search all patients' notes, like “tingling in feet”"}
             aria-label="Search notes across all patients" className="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-slate/70 disabled:opacity-60" />
         </label>

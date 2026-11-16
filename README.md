@@ -373,6 +373,15 @@ was scheduled with, so locally a failed indexing call waits until a later save o
 - **Several sources** are queried in parallel and merged by rank. That merge always runs in the
   app, because a multi-query (and so turbopuffer's RRF) covers one namespace.
 - **Several sources** are queried in parallel and merged by rank.
+- **Warm-up before searching**: focusing a search box (trials and abstracts, or notes across patients), and loading
+  the search page without a query, calls `/api/warm`, at most once a minute per tab. It starts the function instance
+  if it's cold, waits for Langfuse's exporter to load, opens the turbopuffer connection, runs a read-only cache check
+  on `ts-trials` and `ts-pubmed`, and sends `hintCacheWarm` to this app's own `match-notes` if it's cold (tpCall
+  treats warming as a write, so `ts-*` namespaces are only read).
+- **Where the time went** (Explain on the search page): browser time from pressing Search to results painted, the app
+  route's time with a cold-start flag, search across sources, and turbopuffer server time.
+- **Langfuse loads lazily**: the exporter and OpenTelemetry SDK (about 55–70 ms of a cold start) are imported in the
+  background; the warm-up waits for them, and a request that reaches a cold instance first runs untraced.
 - The same fusion, rank-verification and accuracy tools apply to the **notes search across patients** over
   `match-notes` (its Explain dialog checks turbopuffer's RRF on demand). Faceted refinement and ranking boosts are on the
   trials and abstracts search page; the notes search keeps its Supabase record filters.
