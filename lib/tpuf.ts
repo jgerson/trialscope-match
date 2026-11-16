@@ -581,6 +581,27 @@ export async function facetCounts(sources: Source[], f: SearchFilters, patient: 
 const withFilters = (f: Filter | null) => (f ? { filters: f } : {});
 
 /**
+ * Cache state of any namespace, from a tiny eventual Count query (it doesn't wait on object storage). If it isn't
+ * hot or warm and `warm` is set, ask turbopuffer to start loading it into cache. In this app tpCall only allows the
+ * "warm" op on match-notes; for ts-trials and ts-pubmed, call it with warm=false (a read-only check).
+ */
+export type CacheState = { state: "warm" | "warming" | "cold"; temperature: string | null; ms: number };
+
+export async function namespaceCache(namespace: string, warm: boolean, label = "cache-check"): Promise<CacheState> {
+  const ns = tp().namespace(namespace);
+  const req = { aggregate_by: { c: ["Count"] }, consistency: { level: "eventual" } };
+  const t0 = performance.now();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const res: any = await tpCall("query", namespace, req, () => ns.query(req as any), { label });
+  const temperature = typeof res.performance?.cache_temperature === "string" ? res.performance.cache_temperature : null;
+  const ms = Math.round(performance.now() - t0);
+  if (temperature === "hot" || temperature === "warm") return { state: "warm", temperature, ms };
+  if (!warm) return { state: "cold", temperature, ms };
+  await tpCall("warm", namespace, {}, () => ns.hintCacheWarm(), { label: "hint-cache-warm" });
+  return { state: "warming", temperature, ms };
+}
+
+/**
  * For one search request as the Explain panel shows it: turbopuffer's query plan for each subquery, and the same
  * request timed with strong and with eventual consistency.
  */
