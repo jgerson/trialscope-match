@@ -382,8 +382,11 @@ was scheduled with, so locally a failed indexing call waits until a later save o
   if it's cold, waits for Langfuse's exporter to load, opens the turbopuffer connection, and sends
   `hint_cache_warm` to `ts-trials`, `ts-pubmed` and `match-notes` every time, as turbopuffer's docs recommend at the
   start of a session (it's free when a namespace is already warm, and changes no data).
-- **Where the time went** (Explain on the search page): browser time from pressing Search to results painted, the app
-  route's time with a cold-start flag, search across sources, and turbopuffer server time.
+- **Where the time went** (top of the Explain drawer): one sentence and one bar for the search you just ran, from
+  pressing Search to results on screen, split into embedding the query, searching in turbopuffer, the app (including
+  the trip to turbopuffer) and the network plus drawing the page. Nothing is re-run to get these: the numbers come from
+  the browser's clock, the route's clock and the timing turbopuffer returns with the slowest source's results. The
+  checks below it (RRF, query plan, ANN accuracy) do run new queries and show their own timings.
 - **Langfuse loads lazily**: the exporter and OpenTelemetry SDK (about 55–70 ms of a cold start) are imported in the
   background; the warm-up waits for them, and a request that reaches a cold instance first runs untraced.
 - The same fusion, rank-verification and accuracy tools apply to the **notes search across patients** over
