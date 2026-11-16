@@ -21,6 +21,9 @@ import { NS } from "./config";
 // it may write to.
 const READABLE = new Set([NS.trials, NS.pubmed, NS.notes]);
 const WRITABLE = new Set([NS.notes]);
+// hint_cache_warm changes no data (turbopuffer's docs: it only prepares a namespace for low-latency queries), so it's
+// allowed on the corpora this app reads as well as on its own namespace.
+const WARMABLE = new Set([NS.trials, NS.pubmed, NS.notes]);
 
 export type TpufOp = "query" | "multi_query" | "write" | "metadata" | "warm" | "explain" | "recall";
 
@@ -58,10 +61,14 @@ const TOP_N = 10;
 /** Run one turbopuffer call and record it in the logs and, when available, Langfuse. */
 export async function tpCall<T>(op: TpufOp, namespace: string, request: Record<string, unknown>, run: () => Promise<T>,
   opts: Opts<T>): Promise<T> {
-  // The ts-* namespaces belong to the original TrialScope app: this app only reads ts-trials and ts-pubmed. It writes
-  // only to its own match-notes. Anything else is refused before a request is made.
-  if ((op === "write" || op === "warm") && !WRITABLE.has(namespace)) {
-    throw new Error(`turbopuffer writes are only allowed to ${[...WRITABLE].join(", ")} (refused ${op} on ${namespace})`);
+  // The ts-* namespaces belong to the original TrialScope app: this app only reads ts-trials and ts-pubmed (and may send
+  // them a cache-warm hint, which changes no data). It writes only to its own match-notes. Anything else is refused
+  // before a request is made.
+  if (op === "write" && !WRITABLE.has(namespace)) {
+    throw new Error(`turbopuffer writes are only allowed to ${[...WRITABLE].join(", ")} (refused write on ${namespace})`);
+  }
+  if (op === "warm" && !WARMABLE.has(namespace)) {
+    throw new Error(`turbopuffer cache-warm hints are only allowed to ${[...WARMABLE].join(", ")} (refused on ${namespace})`);
   }
   if (!READABLE.has(namespace)) throw new Error(`turbopuffer namespace ${namespace} is not used by this app`);
   const logged = loggable(op, request);

@@ -31,8 +31,8 @@ namespace, `match-notes`.
 | **turbopuffer** | `match-notes`: every note, synced from Supabase (keyword index plus voyage-4-lite embeddings, `patient_id` filterable) | Written only by the notes sync (`lib/note-index.ts`), read by the search across patients |
 | **ClinicalTrials.gov** | Full trial details, criteria and sites | Read live on the trial page, for the eligibility checklist and candidate patients, and by the copilot's `get_trial_criteria` |
 
-`tpCall` (`lib/tpuf-log.ts`) enforces the turbopuffer rules before any request is made: reads are limited to the
-three namespaces above, and writes to `match-notes` only.
+`tpCall` (`lib/tpuf-log.ts`) enforces the turbopuffer rules before any request is made: reads and cache-warm hints are
+limited to the three namespaces above, and writes to `match-notes` only.
 
 ## When each one is called
 
@@ -375,9 +375,9 @@ was scheduled with, so locally a failed indexing call waits until a later save o
 - **Several sources** are queried in parallel and merged by rank.
 - **Warm-up before searching**: focusing a search box (trials and abstracts, or notes across patients), and loading
   the search page without a query, calls `/api/warm`, at most once a minute per tab. It starts the function instance
-  if it's cold, waits for Langfuse's exporter to load, opens the turbopuffer connection, runs a read-only cache check
-  on `ts-trials` and `ts-pubmed`, and sends `hintCacheWarm` to this app's own `match-notes` if it's cold (tpCall
-  treats warming as a write, so `ts-*` namespaces are only read).
+  if it's cold, waits for Langfuse's exporter to load, opens the turbopuffer connection, and sends
+  `hint_cache_warm` to `ts-trials`, `ts-pubmed` and `match-notes` every time, as turbopuffer's docs recommend at the
+  start of a session (it's free when a namespace is already warm, and changes no data).
 - **Where the time went** (Explain on the search page): browser time from pressing Search to results painted, the app
   route's time with a cold-start flag, search across sources, and turbopuffer server time.
 - **Langfuse loads lazily**: the exporter and OpenTelemetry SDK (about 55–70 ms of a cold start) are imported in the
