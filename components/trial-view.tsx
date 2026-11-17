@@ -8,7 +8,6 @@ import type { CriterionResult, CriterionStatus } from "@/lib/eligibility";
 import { milesBetween, placeCoords } from "@/lib/places";
 import type { Patient } from "@/lib/types";
 import { useApp } from "./app-shell";
-import { TrialPatients } from "./trial-patients";
 import { cx, SourceTag } from "./ui";
 
 const SitesMap = dynamic(() => import("./sites-map"), {
@@ -39,11 +38,9 @@ export function TrialView({ trial }: { trial: Trial }) {
         </div>
       </header>
 
-      <TrialPatients nct={trial.nct} />
-
       {!patient ? (
         <p id="eligibility" className="mt-8 scroll-mt-6 rounded-2xl border border-line bg-surface px-5 py-4 text-[14px] text-slate">
-          Select a patient in the sidebar, or use Check eligibility above, to check their eligibility and see the sites nearest to them.
+          Select a patient in the sidebar to check their eligibility and see the sites nearest to them.
         </p>
       ) : (
         <div id="eligibility" className="mt-8 grid scroll-mt-6 gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
