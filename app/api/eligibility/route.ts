@@ -29,7 +29,7 @@ export async function POST(req: Request) {
       span.update({ input: { nct, patientId: patient.id }, metadata: { model: config.copilotModel } });
       const t0 = performance.now();
       try {
-        // The trial from ClinicalTrials.gov; the record and notes from Supabase. All three in parallel.
+        // The trial from ClinicalTrials.gov, the record from Supabase, the notes from turbopuffer. All three in parallel.
         const [trial, record, notes] = await Promise.all([
           startActiveObservation("fetch-trial", async (r) => {
             r.update({ input: { nct }, metadata: { source: "ClinicalTrials.gov" } });
@@ -45,7 +45,7 @@ export async function POST(req: Request) {
             return rec;
           }, { asType: "retriever" }),
           startActiveObservation("read-patient-notes", async (r) => {
-            r.update({ input: { patientId: patient.id } });
+            r.update({ input: { patientId: patient.id }, metadata: { source: "turbopuffer", namespace: `ts-patient-${patient.id}` } });
             const n = await listNotes(patient.id);
             r.update({ output: n.slice(0, 20).map((x) => ({ id: x.id, date: x.visit_date, type: x.note_type, title: x.title })), metadata: { notes: n.length, used: Math.min(n.length, 20) } });
             return n;

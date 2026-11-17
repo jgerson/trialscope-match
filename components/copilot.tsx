@@ -26,13 +26,21 @@ const TAG_RE = /\[([NPTRH]\d+)\]/g;
 /** Tags the finished answer cites, or undefined while it is still being written. */
 const citedIn = (t: Turn) => (t.seconds == null ? undefined : new Set([...t.answer.matchAll(TAG_RE)].map((m) => m[1])));
 
-const SUGGESTIONS = (p: Patient) => [
-  `Is there a recruiting trial ${p.name.split(" ")[0]} might qualify for?`,
-  "Is any current medication or lab value likely to exclude them from trials?",
-  "How has kidney function changed over time?",
-];
+// Labs worth asking about over time, in order of preference; the third suggestion uses the first one this patient has.
+const TREND_LABS = ["eGFR", "Creatinine", "HbA1c", "LVEF", "NT-proBNP", "BNP", "Hemoglobin", "LDL", "CEA", "PSA", "CA-125"];
 
-export function Copilot({ patient }: { patient: Patient }) {
+const SUGGESTIONS = (p: Patient, labs: string[]) => {
+  const lab = TREND_LABS.find((t) => labs.some((l) => l.toLowerCase() === t.toLowerCase()))
+    ?? labs[0];
+  return [
+    `Is there a recruiting trial ${p.name.split(" ")[0]} might qualify for?`,
+    "Is any current medication or lab value likely to exclude them from trials?",
+    lab ? `How has ${lab} changed over time?` : "Summarize this patient's course so far.",
+  ];
+};
+
+/** labs: the names of this patient's labs (from their record), for the suggested questions. */
+export function Copilot({ patient, labs = [] }: { patient: Patient; labs?: string[] }) {
   const { copilotEnabled } = useApp();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
@@ -109,7 +117,7 @@ export function Copilot({ patient }: { patient: Patient }) {
                 : "The copilot is off on this deployment. Deploy on Vercel with AI Gateway enabled, or set AI_GATEWAY_API_KEY or ANTHROPIC_API_KEY, to turn it on. Search and notes work without it."}
             </p>
             <div className="mt-4 space-y-2">
-              {SUGGESTIONS(patient).map((s) => (
+              {SUGGESTIONS(patient, labs).map((s) => (
                 <button key={s} disabled={!copilotEnabled} onClick={() => ask(s)}
                   className="block w-full rounded-xl border border-line px-3.5 py-2.5 text-left text-[13.5px] text-ink-2 hover:border-line-2 hover:text-ink disabled:opacity-50">
                   {s}

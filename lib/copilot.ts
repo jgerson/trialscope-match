@@ -1,6 +1,7 @@
-// The copilot: Claude with five tools, streamed to the browser as NDJSON events. Three read the patient from Supabase
-// Postgres (record, lab history, notes); one searches the shared corpora in turbopuffer (PubMed, trials); one reads
-// trials' full eligibility criteria live from ClinicalTrials.gov.
+// The copilot: Claude with five tools, streamed to the browser as NDJSON events. Two read the patient's structured
+// record from Supabase Postgres (record, lab history); one reads their notes from turbopuffer (ts-patient-<id>); one
+// searches the shared corpora in turbopuffer (PubMed, trials); one reads trials' full eligibility criteria live from
+// ClinicalTrials.gov.
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { getVercelOidcToken } from "@vercel/oidc";
@@ -36,7 +37,7 @@ const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "read_patient_notes",
-    description: "Read the current patient's most recent clinical notes in full, newest first (Postgres).",
+    description: "Read the current patient's most recent clinical notes in full, newest first (turbopuffer).",
     input_schema: { type: "object", properties: { limit: { type: "integer" } } },
   },
   {
@@ -113,7 +114,7 @@ const CRITERIA_MAX = 10_000;
 const CRITERIA_TRIALS_MAX = 5;
 
 const SYSTEM = (patient: Patient | null) => `You are the TrialScope copilot, helping a physician with their patient's record \
-and notes (in the clinic's Postgres database), PubMed and ClinicalTrials.gov (searched in turbopuffer). All patients \
+(in the clinic's Postgres database), their notes, PubMed and ClinicalTrials.gov (in turbopuffer). All patients \
 are synthetic demo records.
 
 Rules:
@@ -312,11 +313,11 @@ async function copilotLoop(
       if (!patient) return "No patient selected.";
       // Capped: some models ask for 50+ notes, which bloats every later turn of the conversation.
       const notes = (await listNotes(patient.id)).slice(0, Math.min(Number(input.limit ?? 10), 20));
-      updateActiveObservation({ metadata: { store: "supabase", table: "notes", notes: notes.length } }, { asType: "tool" });
+      updateActiveObservation({ metadata: { store: "turbopuffer", namespace: NS.patient(patient.id), notes: notes.length } }, { asType: "tool" });
       const returned: { tag: string; title: string; key: string }[] = [];
       const out = notes.map((n) => {
         const h: Hit = {
-          key: `notes:${n.id}`, id: n.id, kind: "notes", namespace: "supabase:notes", title: n.title,
+          key: `${NS.patient(patient.id)}:${n.id}`, id: n.id, kind: "notes", namespace: NS.patient(patient.id), title: n.title,
           url: null, meta: [n.visit_date, n.note_type, n.author], code: null, snippet: n.body.slice(0, 900), nsRank: 0, overall: 0,
           fused: 0, appFused: null, rrf: 0, vector: null, bm25: null, terms: [], raw: {},
         };
@@ -324,7 +325,7 @@ async function copilotLoop(
         returned.push({ tag: t, title: h.title, key: h.key });
         return fmt(t, h);
       });
-      emit({ type: "step", tool: name, input, store: "supabase", results: notes.length, ms: performance.now() - t1, returned, reasoning });
+      emit({ type: "step", tool: name, input, store: "turbopuffer", results: notes.length, ms: performance.now() - t1, returned, reasoning });
       return out.length ? `Notes for ${patient.name} (patient ${patient.id}), newest first:\n\n${out.join("\n\n")}` : "No notes.";
     }
     if (name === "get_trial_criteria") {

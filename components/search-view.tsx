@@ -44,9 +44,7 @@ type Area = "notes" | "literature";
  */
 function initialSources(params: URLSearchParams): { area: Area; lit: Source[] } {
   const inParam = params.get("in");
-  // Notes are searched from the patient workspace (the search across patients), not here, so old notes links open the
-  // literature search.
-  if (inParam === "notes" || params.get("scope") === "patient") return { area: "literature", lit: ["pubmed"] };
+  if (inParam === "notes" || params.get("scope") === "patient") return { area: "notes", lit: ["pubmed"] };
   const picked = (inParam ?? "").split(",").filter((s): s is Source => LITERATURE.includes(s as Source));
   if (picked.length) return { area: "literature", lit: [picked[0]] };
   // "fulltext" is from when full-text articles were searchable; it now opens abstracts.
@@ -188,6 +186,8 @@ export function SearchView() {
 
   const corpusTotal = ["pubmed", "trials"].reduce((n, k) => n + (stats[k]?.bytes ?? 0), 0);
 
+  const notesLabel = patient ? `${patient.name.split(" ")[0]}'s notes` : "Patient notes";
+
   return (
     <div className="mx-auto max-w-[1360px] px-5 pb-20 sm:px-8 lg:px-10">
       <div className={cx("transition-[padding] duration-300", q ? "pt-8" : "pt-[12vh]")}>
@@ -197,8 +197,8 @@ export function SearchView() {
               Search trials and <em className="italic text-slate">the literature</em>.
             </h1>
             <p className="mt-4 max-w-[62ch] text-[16px] leading-relaxed text-slate">
-              PubMed and ClinicalTrials.gov, ranked by turbopuffer. Exact terms match on keywords, questions
-              match on meaning. Pick a patient to filter trials by their age and sex from Supabase.
+              PubMed and ClinicalTrials.gov, or a patient’s own notes, ranked by turbopuffer. Exact terms match on
+              keywords, questions match on meaning. Pick a patient to filter trials by their age and sex from Supabase.
             </p>
           </div>
         )}
@@ -216,6 +216,12 @@ export function SearchView() {
         <CorpusLine area={area} patient={patient} stats={stats} total={corpusTotal} />
 
         <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3">
+          <Segmented label="Search" value={area} onChange={(a) => setSources(({ lit: cur }) => ({ area: a, lit: cur }))} options={[
+            { value: "notes", label: notesLabel, hint: patient
+              ? `Only ${patient.name}'s notes, in their own turbopuffer namespace (ts-patient-${patient.id}), shared with the original TrialScope app.`
+              : "Pick a patient on the left to search their notes. Each patient has their own turbopuffer namespace." },
+            { value: "literature", label: "Literature and trials", hint: "Public medical literature and trials. Pick abstracts or trials: each search covers one source, ranked by turbopuffer." },
+          ]} />
           {area === "literature" && (
             <div role="radiogroup" aria-label="Source" className="inline-flex flex-wrap gap-1.5">
               {LITERATURE.map((s) => (

@@ -19,8 +19,6 @@ export const config = {
   // system prompt, tools and earlier turns; cached, those cost a fraction of the input price on the next call.
   promptCache: ["1", "true", "yes"].includes((process.env.COPILOT_PROMPT_CACHE ?? "").toLowerCase()),
   embedModel: "voyage/voyage-4-lite",
-  // Shared secret for /api/index-notes, the once-a-minute indexing sweep that Supabase's pg_cron calls.
-  indexNotesSecret: process.env.INDEX_NOTES_SECRET ?? "",
   // Hybrid search fuses on turbopuffer (rerank_by ["RRF"]). Verification re-runs the two subqueries unfused, recomputes
   // RRF in the app and checks the two agree; it also powers the per-list ranks in the Explain panel (see fusionVerify).
   // Ranking boosts map BM25 into 0..1 with Saturate; this is the BM25 score that becomes 0.5 (see lib/ranking.ts).
@@ -41,13 +39,12 @@ export const config = {
 export const copilotEnabled = Boolean(config.anthropicKey || config.gatewayKey || config.onVercel);
 
 // turbopuffer namespaces. ts-trials and ts-pubmed are the original TrialScope app's shared corpora, read only.
-// match-notes is this app's own: every note, synced from Supabase (lib/note-index.ts), with patient_id as a filter.
-// Patients and notes themselves live in Supabase (see lib/patients.ts).
+// Each patient's notes live in ts-patient-<id>, shared with the original apps and read and written here (lib/notes.ts).
+// The structured record (patients, conditions, medications, labs) lives in Supabase (lib/patients.ts).
 export const NS = {
   prefix: "ts-",
   trials: "ts-trials",
   pubmed: "ts-pubmed",
-  notes: "match-notes",
   // Each patient's notes, shared with the original TrialScope apps (same namespace, same schema), read and written here.
   patient: (id: string) => `ts-patient-${id}`,
   patientPrefix: "ts-patient-",

@@ -12,8 +12,9 @@ export const dynamic = "force-dynamic";
 /**
  * Warm-up before a search: the browser calls this when you focus a search box (at most once a minute). By the time you
  * press Search, the function instance is running, Langfuse's exporter has loaded and the connection to turbopuffer is
- * open. Following turbopuffer's docs, every namespace a search will read (ts-trials, ts-pubmed, match-notes) gets a
- * cache-warm hint, every time; it's free when a namespace is already warm. The hint changes no data.
+ * open. Following turbopuffer's docs, both shared corpora (ts-trials, ts-pubmed) get a cache-warm hint, every time; it's
+ * free when a namespace is already warm. The hint changes no data. A patient's notes namespace is small and is read as
+ * soon as their workspace opens.
  */
 export async function POST() {
   const t0 = performance.now();
@@ -24,7 +25,7 @@ export async function POST() {
   // cold start). One "warm-up" trace, with each namespace's cache-warm hint and Count query nested under it.
   await ensureLangfuse();
   after(flushLangfuse);
-  const namespaces = [NS.trials, NS.pubmed, NS.notes];
+  const namespaces = [NS.trials, NS.pubmed];
   const caches = await newTrace(
     { userId: user, tags: ["warm-up"], traceName: "warm-up", metadata: { cold: instance.cold, ageS: instance.ageS } },
     () => startActiveObservation("warm-up", async (obs) => {

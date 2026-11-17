@@ -9,7 +9,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 
 export default async function PatientPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  // The structured record and the notes both come from Supabase, in parallel.
+  // The structured record (Supabase) and the notes (turbopuffer, ts-patient-<id>), in parallel.
   const t0 = performance.now();
   const [record, notes] = await Promise.all([getRecord(id), listNotes(id)]);
   if (!record) notFound();

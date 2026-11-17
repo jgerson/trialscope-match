@@ -24,7 +24,6 @@ export interface Patient {
   primary_dx: string;
   stage: string;
   biomarkers: string;
-  note_count: number;
 }
 
 export interface Condition {
@@ -250,14 +249,21 @@ export const KIND_LABEL: Record<Kind, string> = {
 
 /** What one note save did in Postgres, for the "What the save did" panel. */
 export interface WriteReport {
-  table: "notes";
+  namespace: string;
   kind: "insert" | "update";
-  previous: Note | null; // the stored version before this save, for the diff
-  sql: string; // the statement, with parameters shown as $1, $2…
+  previous: Note | null; // the stored version before this upsert, for the diff
+  row: Record<string, string>; // the row as sent, with a long body shortened for display
+  bodyChars: number;
+  schema: { field: string; stored: string }[];
   readMs: number; // looking up the previous version
-  writeMs: number; // the insert or update, measured from the app server (network included)
-  rowsAffected: number;
-  updatedAt: string; // the row's updated_at after the save
+  writeMs: number; // the upsert, measured from the app server (network included)
+  visibleMs: number; // from write acknowledged to the note being returned by a query
+  serverMs: number | null; // turbopuffer's own processing time for the write
+  embeddingMs: number | null;
+  embeddingTokens: number | null;
+  rowsAffected: number | null;
+  rowsUpserted: number | null;
+  billableBytes: number | null;
 }
 
 /** Tokens and approximate cost for one copilot answer. */

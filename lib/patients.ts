@@ -1,13 +1,13 @@
-// The patient record, from Supabase Postgres: patients, conditions, medications, observations (labs and biomarkers) and
-// notes. Reads build the same Patient shape the original turbopuffer-backed app used; writes are plain inserts and
+// The patient record, from Supabase Postgres: patients, conditions, medications and observations (labs and biomarkers).
+// Notes are in turbopuffer (lib/notes.ts). Reads build the same Patient shape the original turbopuffer-backed app used; writes are plain inserts and
 // updates (the app's database role can't delete).
 import "server-only";
 import { cache } from "react";
 import { randomUUID } from "node:crypto";
 import { db, timed, type QueryTiming } from "./db";
-import type { Condition, Medication, Note, Observation, Patient, PatientRecord, WriteReport } from "./types";
+import type { Condition, Medication, Observation, Patient, PatientRecord } from "./types";
 
-// One row per patient: the patient, their active primary condition, their latest result per biomarker, a note count.
+// One row per patient: the patient, their active primary condition and their latest result per biomarker.
 // Biomarkers read like the original app's text field: "HER2+, ER-, PD-L1 50%".
 const PATIENT_ROWS = `
   select p.id, p.name, p.date_of_birth, extract(year from age(p.date_of_birth))::int as age, p.sex, p.city, p.state,
@@ -18,8 +18,7 @@ const PATIENT_ROWS = `
                                            else b.name || ' ' || b.result end, ', ' order by b.name)
            from (select distinct on (name) name, result from observations
                  where patient_id = p.id and kind = 'biomarker' order by name, observed_on desc, id desc) b
-         ), '') as biomarkers,
-         (select count(*)::int from notes n where n.patient_id = p.id) as note_count
+         ), '') as biomarkers
   from patients p
   left join conditions c on c.patient_id = p.id and c.is_primary and c.status = 'active'`;
 
@@ -77,53 +76,8 @@ export async function labHistory(id: string, name: string): Promise<{ rows: Obse
 
 // ------------------------------------------------------------------ notes
 
-export async function listNotes(patientId: string, log?: QueryTiming[]): Promise<Note[]> {
-  const rows = await timed("list-notes", () => db()<Note[]>`
-    select id, title, body, note_type, visit_date, author from notes
-    where patient_id = ${patientId} order by visit_date desc, updated_at desc`, log);
-  return [...rows];
-}
-
-/** The stored author of one of this patient's notes, or null when the patient has no note with that id. */
-export async function noteAuthor(id: string, patientId: string): Promise<string | null> {
-  const rows = await timed("read-note-author", () => db()<{ author: string }[]>`
-    select author from notes where id = ${id} and patient_id = ${patientId}`);
-  return rows[0]?.author ?? null;
-}
-
-/** Insert or update one note and report what happened, for the "What the save did" panel. */
-export async function saveNote(patientId: string, note: Note): Promise<WriteReport & { id: string }> {
-  const sql = db();
-  const tr = performance.now();
-  const prev = await timed("read-previous-note", () => sql<Note[]>`
-    select id, title, body, note_type, visit_date, author from notes where id = ${note.id} and patient_id = ${patientId}`);
-  const readMs = performance.now() - tr;
-  const previous = prev[0] ?? null;
-
-  const t0 = performance.now();
-  let res: { updated_at: Date }[] & { count: number };
-  let statement: string;
-  if (previous) {
-    statement = "update notes set title = $1, body = $2, note_type = $3, visit_date = $4, updated_at = now()\n" +
-      "where id = $5 and patient_id = $6 returning updated_at";
-    res = await timed("update-note", () => sql`
-      update notes set title = ${note.title}, body = ${note.body}, note_type = ${note.note_type},
-        visit_date = ${note.visit_date}, updated_at = now()
-      where id = ${note.id} and patient_id = ${patientId} returning updated_at`) as typeof res;
-  } else {
-    statement = "insert into notes (id, patient_id, title, body, note_type, visit_date, author)\n" +
-      "values ($1, $2, $3, $4, $5, $6, $7) returning updated_at";
-    res = await timed("insert-note", () => sql`
-      insert into notes (id, patient_id, title, body, note_type, visit_date, author)
-      values (${note.id}, ${patientId}, ${note.title}, ${note.body}, ${note.note_type}, ${note.visit_date}, ${note.author})
-      returning updated_at`) as typeof res;
-  }
-  const writeMs = performance.now() - t0;
-  return {
-    id: note.id, table: "notes", kind: previous ? "update" : "insert", previous, sql: statement, readMs, writeMs,
-    rowsAffected: res.count, updatedAt: new Date(res[0]?.updated_at ?? Date.now()).toISOString(),
-  };
-}
+// Notes live in turbopuffer (each patient's ts-patient-<id> namespace), not here; see lib/notes.ts.
+export { listNotes, noteAuthor, saveNote } from "./notes";
 
 // ------------------------------------------------------------------ editing the record
 

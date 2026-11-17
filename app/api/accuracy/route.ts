@@ -17,7 +17,7 @@ export async function POST(req: Request) {
   const body = (await req.json()) as { namespace?: string; query?: string; request?: Record<string, unknown> };
   const namespace = String(body.namespace ?? "");
   const query = String(body.query ?? "").trim().slice(0, 500);
-  if (![NS.trials, NS.pubmed, NS.notes].includes(namespace) || !query) return NextResponse.json({ error: "namespace and query are required." }, { status: 400 });
+  if (!([NS.trials, NS.pubmed].includes(namespace) || namespace.startsWith(NS.patientPrefix)) || !query) return NextResponse.json({ error: "namespace and query are required." }, { status: 400 });
   const raw = body.request ?? {};
   // The vector subquery is the first of a multi-query, or the request itself for vector-only search.
   const vec = (Array.isArray(raw.queries) ? raw.queries[0] : raw) as Record<string, unknown>;

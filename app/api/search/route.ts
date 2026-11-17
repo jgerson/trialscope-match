@@ -40,12 +40,13 @@ export async function POST(req: Request) {
 
   const sources = parseSources(body.sources, body.scope);
 
-  // The shared corpora in turbopuffer. Notes are searched from the patient workspace instead (/api/patient-search, over
-  // match-notes); here the patient (from Supabase) only supplies age and sex when "match patient" is on.
+  // One source per search: the selected patient's notes (their ts-patient-<id> namespace), abstracts or trials. For
+  // trials, the patient (from Supabase) also supplies age and sex when "match patient" is on.
   const targets: { namespace: string; filter: unknown[] | null }[] = [];
+  if (sources.includes("notes") && patient) targets.push({ namespace: NS.patient(patient.id), filter: buildFilters("notes", f) });
   if (sources.includes("pubmed")) targets.push({ namespace: NS.pubmed, filter: buildFilters("pubmed", f) });
   if (sources.includes("trials")) targets.push({ namespace: NS.trials, filter: buildFilters("trials", f, patient) });
-  if (!targets.length) return NextResponse.json({ error: "Pick abstracts or trials." }, { status: 400 });
+  if (!targets.length) return NextResponse.json({ error: sources.includes("notes") ? "Pick a patient on the left to search their notes." : "Pick abstracts or trials." }, { status: 400 });
 
   // One Langfuse trace per search (tagged "search"), with each namespace's turbopuffer call nested under it.
   after(flushLangfuse);
@@ -71,7 +72,7 @@ export async function POST(req: Request) {
   }
 }
 
-const ALL: Source[] = ["pubmed", "trials"];
+const ALL: Source[] = ["notes", "pubmed", "trials"];
 
 /**
  * The source to search (one per search, so every rank is turbopuffer's own). Older links send `scope` instead: "literature", "trials" or "all"
@@ -80,8 +81,8 @@ const ALL: Source[] = ["pubmed", "trials"];
 function parseSources(sources: unknown, scope?: string): Source[] {
   if (Array.isArray(sources)) {
     const picked = ALL.filter((s) => sources.includes(s));
-    return [picked[0] ?? "pubmed"];
+    return [picked.includes("notes") ? "notes" : picked[0] ?? "pubmed"];
   }
-  return ({ literature: ["pubmed"], fulltext: ["pubmed"], trials: ["trials"] } as Record<string, Source[]>)[scope ?? ""]
+  return ({ patient: ["notes"], literature: ["pubmed"], fulltext: ["pubmed"], trials: ["trials"] } as Record<string, Source[]>)[scope ?? ""]
     ?? ["pubmed"];
 }

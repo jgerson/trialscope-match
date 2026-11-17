@@ -1,5 +1,5 @@
 // turbopuffer reads: search modes, multi-namespace merge, corpus stats, facets and query plans. Searches the shared
-// corpora (ts-trials, ts-pubmed) and this app's match-notes, which lib/note-index.ts keeps in sync with Supabase.
+// corpora (ts-trials, ts-pubmed) and each patient's notes (ts-patient-<id>, see lib/notes.ts).
 import "server-only";
 import Turbopuffer from "@turbopuffer/turbopuffer";
 import { config, NS, RRF_K } from "./config";
@@ -32,7 +32,7 @@ export function kindOf(namespace: string): Kind {
 const DISPLAY: Record<Kind, string[]> = {
   trials: ["title", "summary", "nct_id", "status", "phases", "conditions", "countries", "sponsor", "start_year"],
   pubmed: ["title", "abstract", "pmid", "journal", "year", "pub_types", "topic"],
-  notes: ["title", "body", "note_type", "visit_date", "author", "patient_id"],
+  notes: ["title", "body", "note_type", "visit_date", "author"],
 };
 
 // ------------------------------------------------------------------ filters
@@ -513,7 +513,7 @@ export async function facetCounts(sources: Source[], f: SearchFilters, patient: 
     return ps.length === 0 ? null : ps.length === 1 ? ps[0] : ["And", ps];
   };
   const targets = sources.flatMap((source) => {
-    // Notes are searched from the patient workspace (match-notes), not on this page, so they have no facets here.
+    // Notes have no facet panel: a patient's notes are few enough to read, and their namespace is per patient.
     if (source === "notes") return [];
     return [{ source, namespace: source === "trials" ? NS.trials : NS.pubmed }];
   });

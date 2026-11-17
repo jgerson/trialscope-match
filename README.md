@@ -1,12 +1,11 @@
 # TrialScope Match
 
 Find clinical trials and research for a patient, with a relational database and a search engine side by side. The
-patient's record (conditions, medications, labs, biomarkers) and clinical notes live in
-[Supabase](https://supabase.com) Postgres; PubMed abstracts and ClinicalTrials.gov records are searched in
-[turbopuffer](https://turbopuffer.com). A Claude copilot reads exact facts from SQL, then uses them to filter and
-word its turbopuffer searches, and answers with citations. Notes are synced from Postgres into turbopuffer, so you
-can search them across every patient, alone or combined with record filters; and every trial page lists which
-patients could fit it, scored by one SQL query against rules read from the criteria. Built with Next.js, deployed on
+patient's structured record (conditions, medications, labs, biomarkers) lives in [Supabase](https://supabase.com)
+Postgres; their clinical notes, PubMed abstracts and ClinicalTrials.gov records live in
+[turbopuffer](https://turbopuffer.com), each patient's notes in their own namespace. A Claude copilot reads exact
+facts from SQL, then uses them to filter and word its turbopuffer searches, and answers with citations. Every trial
+page lists which patients could fit it, scored by one SQL query against rules read from the criteria. Built with Next.js, deployed on
 Vercel.
 
 > **Personal learning project.** I built TrialScope Match on my own time to learn how a transactional database and a
@@ -18,47 +17,43 @@ Vercel.
 > medical advice.
 
 This started as a copy of [jgerson/trialscope-vercel](https://github.com/jgerson/trialscope-vercel), where everything,
-patients and notes included, lives in turbopuffer. That app and its data are unchanged: this one only reads the two
-shared corpora from turbopuffer, keeps its own patient data in Supabase, and writes only to its own turbopuffer
-namespace, `match-notes`.
+patients and notes included, lives in turbopuffer. This one reads the two shared corpora from turbopuffer, keeps the
+structured patient record in Supabase, and shares each patient's notes namespace (`ts-patient-<id>`) with the original
+app: both read and write it, with the same schema, so a note saved in either app shows up in both.
 
 ## Where the data lives
 
 | Store | What | Access from the app |
 | --- | --- | --- |
-| **Supabase Postgres** | `patients`, `conditions`, `medications`, `observations` (labs and biomarkers), `notes` (the source of truth for notes), `trial_rules` (cached criteria rules) | Read, insert and update, as the `trialscope_app` role (no deletes, no schema changes) |
+| **Supabase Postgres** | `patients`, `conditions`, `medications`, `observations` (labs and biomarkers), `trial_rules` (cached criteria rules) | Read, insert and update, as the `trialscope_app` role (no deletes, no schema changes) |
 | **turbopuffer** | `ts-trials` (49,400 interventional studies), `ts-pubmed` (70,990 abstracts): the original app's shared corpora | Read only |
-| **turbopuffer** | `match-notes`: every note, synced from Supabase (keyword index plus voyage-4-lite embeddings, `patient_id` filterable) | Written only by the notes sync (`lib/note-index.ts`), read by the search across patients |
+| **turbopuffer** | `ts-patient-<id>`: one patient's notes (keyword index plus voyage-4-lite embeddings), shared with the original app | Read and written (`lib/notes.ts`): listing, saving, the notes search, the copilot and the eligibility checklist |
 | **ClinicalTrials.gov** | Full trial details, criteria and sites | Read live on the trial page, for the eligibility checklist and candidate patients, and by the copilot's `get_trial_criteria` |
 
-`tpCall` (`lib/tpuf-log.ts`) enforces the turbopuffer rules before any request is made: reads and cache-warm hints are
-limited to the three namespaces above, and writes to `match-notes` only.
+`tpCall` (`lib/tpuf-log.ts`) enforces the turbopuffer rules before any request is made: `ts-trials` and `ts-pubmed`
+are read only (plus cache-warm hints), writes go only to `ts-patient-<id>` namespaces, and nothing else is touched.
 
 ## When each one is called
 
 | In the app | Supabase | turbopuffer | ClinicalTrials.gov |
 | --- | --- | --- | --- |
 | Patient list (sidebar) | one query | | |
-| Patient page: record panel and notes | five queries in parallel | | |
+| Patient page: record panel and notes | five queries for the record | the patient's notes, in parallel | |
 | Edit the record, add a patient | one insert or update (a transaction for a new patient) | | |
-| Save a note | one insert or update, which also marks the note for indexing | upsert of that note, right after the response | |
-| Notes sync sweep (once a minute, from Supabase `pg_cron`) | notes still waiting | upsert of those notes | |
-| Search across patients: Notes | patient names for the results | hybrid search over `match-notes` | |
-| Search across patients: Attributes | one query, every filter with its evidence | | |
-| Search across patients: Both | the filters pick the patients | hybrid search over only their notes | |
-| Search page | the patient's age and sex, when "match patient" is on | hybrid search | |
+| Save a note | | upsert into `ts-patient-<id>`, then a read until it's visible | |
+| Search page | the patient's age and sex, when "match patient" is on | hybrid search (abstracts, trials or the patient's notes) | |
 | Trial page | | | the trial |
 | Trial page: candidate patients | cached rules, then one query scoring every patient | | the criteria (model call on a trial's first view) |
-| Eligibility checklist | record and notes | | criteria, in parallel with Supabase |
-| Copilot: `get_patient_record`, `get_lab_history`, `read_patient_notes` | yes | | |
+| Eligibility checklist | record | notes | criteria, all three in parallel |
+| Copilot: `get_patient_record`, `get_lab_history` | yes | | |
+| Copilot: `read_patient_notes` | | yes | |
 | Copilot: `search` (trials, PubMed) | | yes | |
 | Copilot: `get_trial_criteria` | | | up to five trials, in parallel |
 
 Every Postgres query that serves a page, a search or an edit is logged as `{"postgres":"<label>","ms":…,"rows":…}` in
 the runtime logs (small housekeeping reads, like the trial-rules cache and the filter suggestions, aren't), next to the existing
 `{"tpuf":…}` lines, and the UI says which database answered: the record panel shows its query count and time (and,
-with **Show SQL**, each statement), the patient search and candidate patients say which store did what and how long
-it took, and each copilot step carries a Supabase, turbopuffer or ClinicalTrials.gov label.
+with **Show SQL**, each statement), candidate patients say which store did what and how long it took, and each copilot step carries a Supabase, turbopuffer or ClinicalTrials.gov label.
 
 ## Setup
 
@@ -80,9 +75,9 @@ it took, and each copilot step carries a Supabase, turbopuffer or ClinicalTrials
    ```
 
    The script creates the tables and the `trialscope_app` role (`supabase/migrations/0001_patient_record.sql`), gives
-   the role a password, and prints `APP_DATABASE_URL`. It then copies the patients from `ts-patients` and their notes
-   from `ts-patient-*` (reading only), with the same ids, and generates medications, labs, extra conditions and dates of
-   birth, which don't exist in turbopuffer. It prints row counts for every turbopuffer namespace before and after, so you
+   the role a password, and prints `APP_DATABASE_URL`. It then copies the patients from `ts-patients` (reading only), with
+   the same ids, and generates medications, labs, extra conditions and dates of birth, which don't exist in turbopuffer.
+   Notes aren't copied: they stay in each patient's `ts-patient-<id>` namespace. It prints row counts for every turbopuffer namespace before and after, so you
    can see nothing there changed. `npm run setup-db -- --check` prints only the counts.
 6. **Add `APP_DATABASE_URL`** (from step 5) to the Vercel project for all environments, then redeploy. The printed
    URL has no `sslmode`; the app asks for SSL itself (`lib/db.ts`), which Supabase can require. Set `PGSSL=off` only
@@ -92,19 +87,10 @@ it took, and each copilot step carries a Supabase, turbopuffer or ClinicalTrials
    of the Clerk instance's domain to the Vercel project (**Settings → Domains**), and set `CLERK_AUTHORIZED_ORIGINS`
    to it. With development keys (`pk_test_…`) the `vercel.app` address works as is.
 8. **The rest of the schema (required).** `setup-db` applies only `0001`; `npm run migrate` applies every file in
-   `supabase/migrations/` from `0002` on (each is safe to run again): `0002` adds the notes-sync columns, `0003` the
-   `trial_rules` table, `0004` its row-level security. It uses the admin connection (`POSTGRES_URL_NON_POOLING`) from
+   `supabase/migrations/` from `0002` on (each is safe to run again): `0002` the old notes-sync columns, `0003` the
+   `trial_rules` table, `0004` its row-level security, `0005` retires the notes sync (unschedules its `pg_cron` job,
+   deletes its Vault secret, drops the sync columns and renames `notes` to `notes_archive`, which the app can't read). It uses the admin connection (`POSTGRES_URL_NON_POOLING`) from
    `.env.local`. Run it again whenever a new migration file appears.
-9. **Notes sync.** Pick a random secret and add it as `INDEX_NOTES_SECRET` to the Vercel project (all environments)
-   and `.env.local`, redeploy, then schedule the once-a-minute sweep in Supabase:
-
-   ```bash
-   npm run setup-index-cron -- https://your-app.example.com
-   ```
-
-   This turns on the `pg_cron` and `pg_net` extensions, stores the secret in Supabase Vault, and schedules a job
-   that POSTs to `/api/index-notes` every minute (Vercel's Hobby plan only runs its own cron jobs once a day). Its
-   first run indexes every existing note. `npm run setup-index-cron -- --remove` unschedules it.
 
 Optional variables carry over from the original app: `COPILOT_MODEL`, `COPILOT_PROMPT_CACHE`, `ANTHROPIC_API_KEY`,
 `READ_ONLY` (now blocks record edits too), the `LANGFUSE_*` keys, and `CLERK_AUTHORIZED_ORIGINS` to pin production
@@ -123,29 +109,14 @@ project from the Supabase dashboard before a demo.
 - **New patient** (sidebar, **New**): demographics and a primary diagnosis, inserted in one transaction, so a patient
   never exists without a diagnosis. The database enforces the rules too: valid sex values (the ones trials filter on),
   ECOG 0 to 5, a unit on every lab, one active primary diagnosis per patient.
-- **Notes in Postgres, synced to turbopuffer.** Same editor; a save is an insert or update in the `notes` table, and
-  **Details** shows the statement, the diff and the time. Postgres is the source of truth; turbopuffer's `match-notes`
-  is an index derived from it:
-  - **Marking.** A note is waiting to be indexed when `notes.indexed_at` is null or older than `updated_at`. Every
-    save already sets `updated_at`, so a save marks its note in the same statement: no queue table that a save could
-    forget to write, and nothing to delete afterwards (the app's role can't delete).
-  - **Indexing.** Right after the save responds (`after()`), `lib/note-index.ts` upserts the note into `match-notes`,
-    where turbopuffer embeds it, then sets `indexed_at` to the exact `updated_at` it sent, only if the note hasn't
-    changed since. An edit that lands mid-index stays waiting.
-  - **Retrying.** Supabase's `pg_cron` calls `/api/index-notes` once a minute (with a shared secret from Vault) to
-    index anything still waiting, so a failed indexing call is retried within a minute.
-  - **Seeing the lag.** The save banner and **Details** show how long the note took to become searchable after the save
-    returned, typically about half a second. Postgres reads see the change at once; search sees it after indexing.
-- **Search across all patients**, at the top of the patient workspace (`lib/patient-search.ts`), in three modes:
-  - **Notes:** one hybrid search over every note in `match-notes`, grouped by patient (a patient ranks by their best
-    note), with **Why this result?** on each note. Search by meaning finds "neuropathy" for "tingling in feet".
-  - **Attributes:** one SQL query over the record, built from filter chips: diagnosis contains, biomarker, medication
-    or drug class (currently, ever or never on), latest lab ≥ or ≤ a value, age, sex, ECOG. Each filter is a scalar
-    subquery that returns the row that satisfied it, so every match shows its evidence ("alectinib (ALK inhibitor),
-    current", "eGFR 71 mL/min/1.73m² (2026-10-19)"). Filter inputs suggest the values that exist in the data.
-  - **Both:** the filters pick the patients in Postgres, then the notes search runs over only those, with a
-    `patient_id In [...]` filter in turbopuffer. Each store does the part it's good at: exact facts, then wording.
-  A timing line says which store answered, how many rows, and how long each took.
+- **Notes in turbopuffer, shared with the original app.** Each patient's notes live in their `ts-patient-<id>`
+  namespace (`lib/notes.ts`), the same namespace and schema the original app uses, so both apps read and write the
+  same notes. A save is one upsert; the app then reads until the note comes back (typically tens of milliseconds) and
+  **Details** shows insert or update, the diff, the row and schema sent, turbopuffer's write report and a live search
+  that finds the note. Notes used to live in a Supabase `notes` table synced into turbopuffer by a `pg_cron` job;
+  migration `0005` retired that (the old table is kept as `notes_archive`).
+- **Searching a patient's notes**: the search page's **Patient notes** option searches the selected patient's
+  namespace, one source per search like abstracts and trials.
 - **Candidate patients for a trial**, on every trial page (`lib/trial-match.ts`), with or without a patient selected:
   1. **Criteria to rules, once per trial.** One model call turns the free-text criteria into rules the record can
      check: a disease (a named diagnosis, or any cancer or heart condition by specialty), stage, biomarker, current,
@@ -163,7 +134,7 @@ project from the Supabase dashboard before a demo.
      selects the patient and runs the checklist below. **Show SQL** shows the query, and the section says plainly when
      only the disease, or nothing beyond age and sex, could be checked.
 - **Copilot tools.** `get_patient_record` returns the record as tagged lines (`[R1]`, `[R2]`…), `get_lab_history`
-  returns one lab over time (`[H1]`…), `read_patient_notes` reads the notes, and `search` covers trials and PubMed.
+  returns one lab over time (`[H1]`…), `read_patient_notes` reads the notes from turbopuffer, and `search` covers trials and PubMed.
   `get_trial_criteria` reads the full inclusion and exclusion criteria for up to five trials live from
   ClinicalTrials.gov (search results carry only a summary), keeping each trial's `[T]` tag.
   The system prompt starts trial matching from the record, not from reading notes, then checks the top trials'
@@ -174,10 +145,10 @@ project from the Supabase dashboard before a demo.
 
 ## Screenshots
 
-These are from the original TrialScope app; the search, Explain and tracing views are the same here. The search
-across patients, candidate patients, notes-sync timing and **Show SQL** views are new and not pictured yet.
+These are from the original TrialScope app; the search, Explain and tracing views are the same here. Candidate
+patients and **Show SQL** are new and not pictured yet.
 
-**Search.** Pick any mix of PubMed abstracts and clinical trials, and a retrieval mode.
+**Search.** Pick a source (a patient's notes, PubMed abstracts or clinical trials) and a retrieval mode.
 The line under the box and the counts below the controls come from turbopuffer aggregate queries and namespace metadata.
 
 ![Search page with source picker, corpus counts and topic and status counts](docs/screenshots/search.png)
@@ -205,27 +176,23 @@ Every turbopuffer request goes through `tpCall` in `lib/tpuf-log.ts`, which writ
 logs: `{"tpuf":"search", "namespace":"ts-pubmed", "ms":..., "networkMs":..., "serverMs":..., "embeddingMs":..., "cache":"hot",
 "billedBytesQueried":..., "rows":[10,10], "top":[[id, score], ...], "request":{...}}`. Search the logs for `"tpuf"`.
 Labels are `search`, `count-rows`, `namespace-metadata`, `facet-counts`, `explain-query`, `consistency-strong`,
-`consistency-eventual` and, for the notes sync's writes to `match-notes`, `index-notes` (with rows upserted, embedding
-tokens and billed bytes written). Each indexing run also logs one `{"noteIndex":"after-save"|"sweep", "indexed":…,
-"skipped":…, "failed":…, "waiting":…}` line. Requests are logged without `include_attributes`, and results as ids and scores.
+`consistency-eventual`, and for note saves `read-previous-note`, `write-note` (with embedding tokens and billed bytes
+written) and `wait-until-visible`. Requests are logged without `include_attributes`, and results as ids and scores.
 `networkMs` is `ms` minus turbopuffer's own `serverMs`: time on the network and in the client.
 Errors are logged too. With Langfuse on, each line carries the `traceId`.
 Vercel keeps runtime logs for an hour on Hobby and a day on Pro.
 
 ### Tracing with Langfuse (optional)
 
-With the Langfuse keys set, every search, note save, copilot question, eligibility check, patient search and
+With the Langfuse keys set, every search, note save, copilot question, eligibility check and
 candidate-patient lookup is sent to
 [Langfuse](https://langfuse.com) as one trace, and every turbopuffer call inside it appears as a `turbopuffer-<label>`
 observation (a retriever for reads, a span for writes) with its request, timings, billed bytes and top results:
 
 - **Search page** (`search-page`, tagged `search`): the query, sources, mode and filters, then one `turbopuffer-search` per
   namespace queried, and the top ten.
-- **Note save** (`save-note`, tagged `notes`): insert or update in Postgres, with the read and write times. The
-  turbopuffer upsert runs after the response, outside that trace; it's logged as `index-notes`, and traced only with
-  `LANGFUSE_TRACE_PAGE_LOADS=true`.
-- **Search across patients** (`search-patients`, tagged `patient-search`): the mode, text and filters, the
-  `turbopuffer-search` over `match-notes` when there's text, and how many patients each store returned.
+- **Note save** (`save-note`, tagged `notes`): `turbopuffer-read-previous-note`, `turbopuffer-write-note` and
+  `turbopuffer-wait-until-visible`, with insert or update and where the time went.
 - **Candidate patients** (`find-trial-patients`, tagged `trial-patients`): the `extract-trial-rules` generation on a
   trial's first view (prompt, rules, tokens, cost), then the rule and candidate counts and the query time.
 - **Explain** (`explain-search`, tagged `explain`): `turbopuffer-explain-query` per subquery, then
@@ -237,7 +204,7 @@ observation (a retriever for reads, a span for writes) with its request, timings
 - **Eligibility** (`check-trial-eligibility`, tagged `eligibility`): `fetch-trial`, `read-patient-record` and `read-patient-notes`, then the
   `assess-eligibility-criteria` generation.
 - **Warm-up** (`warm-up`, tagged `warm-up`): `turbopuffer-hint-cache-warm` and `turbopuffer-warm-check` for each
-  namespace a search reads (`ts-trials`, `ts-pubmed`, `match-notes`), with each one's cache temperature. The route loads
+  shared corpus (`ts-trials`, `ts-pubmed`), with each one's cache temperature. The route loads
   Langfuse's exporter before it starts, so a warm-up on a cold instance is traced too.
 
 Inside these traces you can also find:
@@ -285,16 +252,16 @@ npm run migrate                  # after pulling new migrations
 npm run dev                      # http://localhost:3000
 ```
 
-Notes saved locally are indexed right after the save, as in production. The once-a-minute sweep only calls the URL it
-was scheduled with, so locally a failed indexing call waits until a later save or the production sweep picks it up.
+Notes saved locally go to the same `ts-patient-<id>` namespaces as production (there's one turbopuffer key), so they
+show up in both apps.
 
 ## What's inside
 
-- **Search** (`/`): search PubMed abstracts or trials, one source per search. Every source and retrieval mode (hybrid, vector or BM25) has a tooltip
+- **Search** (`/`): search the selected patient's notes, PubMed abstracts or trials, one source per search. Every source and retrieval mode (hybrid, vector or BM25) has a tooltip
   saying where the data comes from or what the mode matches. The filters panel shows only the filters for the
   sources being searched: status, phase, country and patient age and sex (from Supabase) for trials; year and topic
   for abstracts. Filters set for a source that's turned off are kept but don't
-  apply, and the page says so. Links are shareable: `/?q=...&in=pubmed,trials`.
+  apply, and the page says so. Links are shareable: `/?q=...&in=trials` (or `in=notes`).
 - **Corpus line**: under the search box, the size of each corpus two ways: an exact row count from an aggregate
   `Count` query, and stored bytes from the namespace's metadata, with the monthly storage cost at $0.33 per GB.
   Hover for how each number was fetched and how long it took. The numbers load after the page has rendered
@@ -307,9 +274,8 @@ was scheduled with, so locally a failed indexing call waits until a later save o
   matched words, and, in hybrid mode, the RRF arithmetic. The search-level overview (timings, cache state, the exact
   request, query plan and consistency) is hidden from the page for now; `RunOverview` in `components/explain.tsx`
   still has it, and every search's request and timings are in Langfuse.
-- **Patient workspace** (`/patients/[id]`): the search across all patients at the top, then the record panel, the
-  notes list and a markdown editor with read and edit modes, and the copilot. Record and notes load from Supabase in
-  parallel; **Show SQL** on the record panel lists each query with its time, row count and statement.
+- **Patient workspace** (`/patients/[id]`): the record panel, the notes list and a markdown editor with read and edit
+  modes, and the copilot. The record (Supabase) and the notes (turbopuffer) load in parallel; **Show SQL** on the record panel lists each query with its time, row count and statement.
 - **Copilot**: Claude with five tools (above). Answers stream in, each tool call is listed as it happens with the
   database it hit, and `[N1]`, `[P1]`, `[T1]` tags open source cards; `[R]` and `[H]` tags point at record rows listed
   in the step.
@@ -326,14 +292,13 @@ was scheduled with, so locally a failed indexing call waits until a later save o
   - **Candidate patients**: every patient scored against rules read from the criteria (see above), shown whether or
     not a patient is selected.
   - **Eligibility checklist**: one model call (`lib/eligibility.ts`) checks each criterion against the selected
-    patient's structured record and notes from Supabase. A *meets* or *doesn't meet* verdict must cite a record line
+    patient's structured record (Supabase) and notes (turbopuffer). A *meets* or *doesn't meet* verdict must cite a record line
     or a note that exists, or it is shown as unknown.
   - **Sites near the patient**: recruiting sites sorted by distance from the patient's town, on an OpenStreetMap map.
     Patient towns map to coordinates in `lib/places.ts` (the generator's fixed list), so no geocoding service is used.
 - **⌘K**: jump to any patient or search the corpus from anywhere.
 - **Sign-in with Clerk**: every page and API route requires a signed-in user (`clerkMiddleware` in
-  `proxy.ts`, plus a check in each API route), except `/api/index-notes`, which Supabase's `pg_cron` calls with a
-  shared secret and which returns 404 without it. `proxy.ts` also serves Clerk's `/__clerk` frontend API proxy. There is no sign-up page; accounts are created in Clerk's
+  `proxy.ts`, plus a check in each API route). `proxy.ts` also serves Clerk's `/__clerk` frontend API proxy. There is no sign-up page; accounts are created in Clerk's
   dashboard. With `CLERK_AUTHORIZED_ORIGINS` set, production session tokens are accepted only from those origins. New
   notes are credited to whoever wrote them.
 - **Security and operations**: every response forbids framing by other sites and content-type guessing, uses a
@@ -343,8 +308,8 @@ was scheduled with, so locally a failed indexing call waits until a later save o
 ## How search works
 
 - Each document has one `text` attribute that is both BM25-indexed and natively embedded by
-  turbopuffer (`voyage/voyage-4-lite`), so one attribute serves every mode. `match-notes` is set up the same way
-  (title and body as `text`), so notes search works exactly like trial and abstract search.
+  turbopuffer (`voyage/voyage-4-lite`), so one attribute serves every mode. Patient notes are set up the same
+  way (title and body as `text`), so notes search works exactly like trial and abstract search.
 - **Hybrid** sends one `multiQuery` with a vector subquery and a BM25 subquery, fused with
   reciprocal rank fusion (k = 60). A **Fused by** toggle picks where:
   - **turbopuffer** (default): the request carries `rerank_by: ["RRF"]` and `limit`, and turbopuffer
@@ -386,27 +351,19 @@ was scheduled with, so locally a failed indexing call waits until a later save o
   boosted keyword list with it as usual. `compute_attributes` returns each part per result for the Explain panel. If
   turbopuffer rejects a boosted request (400), the search retries without the breakdown, then as plain BM25, and says
   so. Settings live in the URL (`?rk=recruiting2.recent2-2020-4`). `BOOST_BM25_MIDPOINT` changes the BM25 midpoint.
-- **One source per search**: the search page queries one namespace at a time (abstracts or trials), so every rank
+- **One source per search**: the search page queries one namespace at a time (notes, abstracts or trials), so every rank
   and score on the page comes straight from turbopuffer. turbopuffer queries one namespace per request, and merging
   two would need a formula of the app's own (it used to interleave them by rank); the copilot's search tool still
   merges sources that way, since the model reads the combined list.
-- **Warm-up before searching**: focusing a search box (trials and abstracts, or notes across patients), and loading
+- **Warm-up before searching**: focusing the search box, and loading
   the search page without a query, calls `/api/warm`, at most once a minute per tab. It starts the function instance
   if it's cold, waits for Langfuse's exporter to load, opens the turbopuffer connection, and sends
-  `hint_cache_warm` to `ts-trials`, `ts-pubmed` and `match-notes` every time, as turbopuffer's docs recommend at the
+  `hint_cache_warm` to `ts-trials` and `ts-pubmed` every time, as turbopuffer's docs recommend at the
   start of a session (it's free when a namespace is already warm, and changes no data).
-- **Where the time went** (top of the Explain drawer): one sentence and one bar for the search you just ran, from
-  pressing Search to results on screen, split into embedding the query, searching in turbopuffer, the app (including
-  the trip to turbopuffer) and the network plus drawing the page. Nothing is re-run to get these: the numbers come from
-  the browser's clock, the route's clock and the timing turbopuffer returns with the slowest source's results. The
-  checks below it (RRF, query plan, ANN accuracy) do run new queries and show their own timings.
 - **Langfuse loads lazily**: the exporter and OpenTelemetry SDK (about 55–70 ms of a cold start) are imported in the
   background; the warm-up waits for them, and a request that reaches a cold instance first runs untraced.
-- The same fusion, rank-verification and accuracy tools apply to the **notes search across patients** over
-  `match-notes` (its Explain dialog checks turbopuffer's RRF on demand). Faceted refinement and ranking boosts are on the
-  trials and abstracts search page; the notes search keeps its Supabase record filters.
-- Every new request still goes through `tpCall`, including recall evaluations (op `recall`), so reads stay limited
-  to `ts-trials`, `ts-pubmed` and `match-notes`.
+- Every new request still goes through `tpCall`, including recall evaluations (op `recall`), so access stays limited
+  to `ts-trials`, `ts-pubmed` (read only) and `ts-patient-<id>`.
 
 ## Data
 
@@ -416,8 +373,8 @@ was scheduled with, so locally a failed indexing call waits until a later save o
 | --- | --- | --- | --- |
 | `ts-pubmed` | Oncology and cardiology abstracts, 2015 onward | 70,990 | Searched |
 | `ts-trials` | Interventional studies, most recently updated first | 49,400 | Searched |
-| `ts-patients`, `ts-patient-*` | The original app's patients and notes | 100 patients, 452 notes | Read once by `npm run setup-db` |
-| `match-notes` | This app's notes, synced from Supabase by `lib/note-index.ts` | One per note | Written by the notes sync, searched across patients |
+| `ts-patients` | The original app's patient list | 100 patients | Read once by `npm run setup-db` |
+| `ts-patient-*` | Each patient's notes, shared with the original app | 452 notes at setup | Read and written: listing, saving, notes search, copilot, eligibility |
 
 **Supabase**, schema in `supabase/migrations/`, loaded by `scripts/setup-db.mjs`:
 
@@ -427,17 +384,15 @@ was scheduled with, so locally a failed indexing call waits until a later save o
 | `conditions` | The primary diagnosis with stage, plus generated comorbidities (hypertension, diabetes, kidney disease) |
 | `medications` | Generated from the diagnosis and biomarkers, with drug class; some stopped, some patients on anticoagulants |
 | `observations` | Biomarkers from the original text field; three results per lab over about nine months, a few crossing common cutoffs |
-| `notes` | Copied from `ts-patient-*`, then edited in the app. `indexed_at`, `index_error` and `index_attempts` (migration `0002`) track the notes sync |
+| `notes_archive` | The retired notes table from when notes were synced from here (renamed by `0005`; the app can't read it). Drop it when you no longer need it |
 | `trial_rules` | Each trial's criteria as checkable rules, plus what can't be checked, with the model and tokens used (migration `0003`) |
 
 ## Known limits
 
 - Only abstracts are searched, so details that appear only in an article's body (methods, doses, thresholds) aren't found.
 - Trial eligibility text in the index is cut at 2,500 characters; the trial page reads the full criteria live.
-- Notes search sees a saved note after indexing, typically within a second; until then it returns the previous
-  version. If indexing fails, the once-a-minute sweep retries it. Notes can't be deleted, so the sync only upserts.
-- Many synthetic notes are word-for-word the same across patients (they were generated from templates), so the
-  search across patients often shows the same snippet for several patients.
+- Both apps write the same notes namespaces, so if both edit one note the later save wins.
+- Patients added in this app get a notes namespace but don't appear in the original app's patient list (`ts-patients`).
 - The copilot doesn't search notes yet: it still reads the current patient's notes in full, which is cheap at about
   4 notes per patient.
 - Candidate patients is a screen, not an eligibility decision. Rules cover only what the record holds: oncology
@@ -456,16 +411,14 @@ was scheduled with, so locally a failed indexing call waits until a later save o
 | `app/(app)/trials/[nct]/page.tsx` | Trial page: candidate patients, eligibility checklist and nearby sites |
 | `app/sign-in/` | Clerk sign-in page (no sign-up page: accounts are created in Clerk's dashboard) |
 | `app/api/search`, `api/notes`, `api/patients`, `api/copilot`, `api/eligibility`, `api/feedback` | Server routes (the copilot streams NDJSON; feedback becomes a Langfuse score) |
-| `app/api/patient-search`, `api/trial-patients` | Search across patients; candidate patients for a trial |
-| `app/api/index-notes`, `api/notes/index-status` | The notes-sync sweep (called by `pg_cron`); a saved note's indexing status |
-| `lib/db.ts`, `lib/patients.ts`, `lib/record-input.ts` | Supabase: connection, patient record and notes queries, edit validation |
+| `app/api/trial-patients` | Candidate patients for a trial |
+| `lib/db.ts`, `lib/patients.ts`, `lib/record-input.ts` | Supabase: connection, patient record queries, edit validation |
+| `lib/notes.ts` | Patient notes in turbopuffer (`ts-patient-<id>`): list, read, save |
 | `supabase/migrations/`, `scripts/setup-db.mjs` | Schema and the app's database role; one-time load from turbopuffer |
-| `scripts/migrate.mjs`, `scripts/setup-index-cron.mjs` | Apply migrations after `0001`; schedule the notes-sync sweep in Supabase |
-| `lib/note-index.ts` | Notes sync: indexes waiting notes into `match-notes` and marks them done |
-| `lib/patient-search.ts` | Search across patients: attribute SQL with evidence, notes search, both |
+| `scripts/migrate.mjs` | Apply migrations after `0001` |
 | `lib/trial-match.ts` | Candidate patients: criteria to rules (model, cached), rules to one SQL query |
-| `lib/tpuf.ts` | turbopuffer, read only: search modes, RRF, filters, facets, query plans |
-| `lib/tpuf-log.ts` | Logs every turbopuffer call to Vercel logs and Langfuse; allows reads of three namespaces and writes to `match-notes` only |
+| `lib/tpuf.ts` | turbopuffer search: search modes, RRF, filters, facets, query plans |
+| `lib/tpuf-log.ts` | Logs every turbopuffer call to Vercel logs and Langfuse; allows `ts-trials`/`ts-pubmed` reads and `ts-patient-*` reads and writes only |
 | `lib/copilot.ts` | Claude tool-use loop and citations |
 | `lib/eligibility.ts`, `lib/ctgov.ts`, `lib/places.ts` | Eligibility checklist, live ClinicalTrials.gov reads, site distances |
 | `lib/langfuse.ts`, `lib/langfuse-setup.ts`, `lib/traced-fetch.ts`, `instrumentation.ts` | Optional Langfuse tracing, including network spans |

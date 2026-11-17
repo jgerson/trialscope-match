@@ -1,5 +1,5 @@
 // Eligibility checklist: one model call reads a trial's full criteria (live from ClinicalTrials.gov) and the patient's
-// structured record and notes (from Supabase), then reports each criterion as meets, doesn't meet, or unknown, with the
+// structured record (from Supabase) and notes (from turbopuffer), then reports each criterion as meets, doesn't meet, or unknown, with the
 // evidence it relied on: a record line like R4 (a medication, a lab value with its date) or a note like N2.
 // The server enforces the rules that matter: a verdict other than "unknown" must cite evidence that exists.
 import "server-only";

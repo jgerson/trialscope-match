@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   const namespace = String(body.namespace ?? "");
   const queries = (Array.isArray(body.request?.queries) ? body.request!.queries : []).slice(0, 2).map(clean);
   const hits = (body.hits ?? []).slice(0, 30).map((h) => ({ id: String(h.id), score: Number(h.score) }));
-  if (![NS.trials, NS.pubmed, NS.notes].includes(namespace) || queries.length !== 2 || !hits.length) {
+  if (!([NS.trials, NS.pubmed].includes(namespace) || namespace.startsWith(NS.patientPrefix)) || queries.length !== 2 || !hits.length) {
     return NextResponse.json({ error: "namespace, both subqueries and the fused hits are required." }, { status: 400 });
   }
   after(flushLangfuse);

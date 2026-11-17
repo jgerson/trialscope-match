@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // One-time setup for TrialScope Match's Supabase database.
 //
-//   node scripts/setup-db.mjs            create the tables (if missing), then load patients and notes
+//   node scripts/setup-db.mjs            create the tables (if missing), then load the patient records
 //   node scripts/setup-db.mjs --check    only print row counts: turbopuffer namespaces and Supabase tables
 //   node scripts/setup-db.mjs --rotate   also give the app's database role a new password
 //
-// Reads, never writes, the original app's turbopuffer namespaces: ts-patients for the patient list and
-// ts-patient-{id} for each patient's notes. Their row counts are printed before and after, so you can see they didn't
-// change. Medications, labs, extra conditions and dates of birth don't exist there, so they're generated here:
+// Reads, never writes, the original app's ts-patients namespace for the patient list. Notes aren't loaded: they stay in
+// each patient's ts-patient-{id} namespace, which the app reads and writes directly (lib/notes.ts). Namespace row
+// counts are printed before and after, so you can see they didn't change. Medications, labs, extra conditions and dates of birth don't exist there, so they're generated here:
 // deterministic per patient id (the same every run) and synthetic, like everything else in the demo.
 //
 // Environment (from `vercel env pull .env.local`, or set by hand):
@@ -100,7 +100,7 @@ async function appRole() {
 // ------------------------------------------------------------------ load
 
 async function load(patientsTp) {
-  const rows = { patients: [], conditions: [], medications: [], observations: [], notes: [] };
+  const rows = { patients: [], conditions: [], medications: [], observations: [] };
   for (const p of patientsTp) {
     const id = String(p.id);
     const rnd = rng(id);
@@ -118,11 +118,6 @@ async function load(patientsTp) {
     for (const b of markers) rows.observations.push({ patient_id: id, kind: "biomarker", name: b.name, value: null, unit: "", result: b.result, observed_on: daysAgo(300 + Math.floor(rnd() * 200)) });
     for (const o of labs(specialty, dx, rows.conditions.filter((c) => c.patient_id === id), rnd)) rows.observations.push({ patient_id: id, kind: "lab", result: "", ...o });
 
-    const notes = await readAll(`ts-patient-${id}`, { include_attributes: ["title", "body", "note_type", "visit_date", "author"] });
-    for (const n of notes) {
-      rows.notes.push({ id: String(n.id), patient_id: id, title: String(n.title ?? "Untitled note"), body: String(n.body ?? ""),
-        note_type: String(n.note_type || "Visit note"), visit_date: isDate(n.visit_date) ? n.visit_date : daysAgo(30), author: String(n.author || "Unknown") });
-    }
     process.stdout.write(".");
   }
   console.log();
@@ -134,7 +129,7 @@ async function load(patientsTp) {
     }
   });
   console.log(`Loaded ${rows.patients.length} patients, ${rows.conditions.length} conditions, ${rows.medications.length} medications, ` +
-    `${rows.observations.length} observations and ${rows.notes.length} notes.`);
+    `and ${rows.observations.length} observations.`);
 }
 
 // ------------------------------------------------------------------ synthetic record
@@ -294,8 +289,7 @@ async function pgCounts() {
   const [{ exists }] = await sql`select to_regclass('public.patients') is not null as exists`;
   if (!exists) return { tables: "not created yet" };
   const [r] = await sql`select (select count(*) from patients)::int as patients, (select count(*) from conditions)::int as conditions,
-    (select count(*) from medications)::int as medications, (select count(*) from observations)::int as observations,
-    (select count(*) from notes)::int as notes`;
+    (select count(*) from medications)::int as medications, (select count(*) from observations)::int as observations`;
   return r;
 }
 
@@ -326,7 +320,6 @@ function dob(age, rnd) {
   d.setDate(d.getDate() - 1 - Math.floor(rnd() * 360)); // birthday already passed this year, so the age stays the same
   return d.toISOString().slice(0, 10);
 }
-function isDate(v) { return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v); }
 
 function loadEnvFile(path) {
   if (!existsSync(path)) return;

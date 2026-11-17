@@ -8,11 +8,16 @@
 --
 -- Safe to run more than once (npm run migrate). The existing grant on notes already covers the new columns.
 
-alter table notes
-  add column if not exists indexed_at     timestamptz,           -- the updated_at of the version in turbopuffer; null = never
-  add column if not exists index_error    text,                  -- the last indexing failure, if any
-  add column if not exists index_attempts int not null default 0;
-
--- Only the notes waiting to be indexed, so it stays tiny however many notes there are.
-create index if not exists notes_index_pending on notes (updated_at)
-  where indexed_at is null or indexed_at < updated_at;
+-- Retired by 0005 (notes moved to turbopuffer and the table became notes_archive), so this only runs while notes exists.
+do $$
+begin
+  if to_regclass('public.notes') is not null then
+    alter table notes
+      add column if not exists indexed_at     timestamptz,           -- the updated_at of the version in turbopuffer; null = never
+      add column if not exists index_error    text,                  -- the last indexing failure, if any
+      add column if not exists index_attempts int not null default 0;
+    -- Only the notes waiting to be indexed, so it stays tiny however many notes there are.
+    create index if not exists notes_index_pending on notes (updated_at)
+      where indexed_at is null or indexed_at < updated_at;
+  end if;
+end $$;

@@ -1,5 +1,5 @@
 "use client";
-// Patient workspace: the structured record and notes (both from Supabase), the note editor and the copilot side by side.
+// Patient workspace: the structured record (Supabase), the notes (turbopuffer), the note editor and the copilot side by side.
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { useUser } from "@clerk/nextjs";
@@ -7,9 +7,8 @@ import { Check, Loader2, Plus } from "lucide-react";
 import type { Note, Patient, PatientRecord, WriteReport } from "@/lib/types";
 import { useApp } from "./app-shell";
 import { Copilot } from "./copilot";
-import { PatientSearch } from "./patient-search";
 import { RecordPanel } from "./record-panel";
-import { indexPhrase, SaveDetails, useIndexStatus } from "./save-details";
+import { SaveDetails } from "./save-details";
 import { cx } from "./ui";
 
 const TYPES = ["Visit note", "Result", "Phone call", "Treatment plan", "Other"];
@@ -38,8 +37,6 @@ export function Workspace({ patient, initialRecord, initialNotes, loadMs }: {
   const original = useMemo(() => notes.find((n) => n.id === selId), [notes, selId]);
   const dirty = !original || original.title !== draft.title || original.body !== draft.body ||
     original.note_type !== draft.note_type || original.visit_date !== draft.visit_date;
-  const index = useIndexStatus(saved ? draft.id : undefined, patient.id, saved?.at);
-  const indexed = indexPhrase(index);
 
   useEffect(() => {
     setNotes(initialNotes); setSelId(initialNotes[0]?.id ?? ""); setDraft(initialNotes[0] ?? blank(me));
@@ -73,9 +70,6 @@ export function Workspace({ patient, initialRecord, initialNotes, loadMs }: {
 
   return (
     <div className="mx-auto grid max-w-[1600px] gap-6 px-5 py-8 sm:px-8 lg:px-10 2xl:grid-cols-[250px_minmax(0,1fr)_420px] xl:grid-cols-[minmax(0,1fr)_400px]">
-      {/* search across all patients, above this patient */}
-      <div className="2xl:col-span-3 xl:col-span-2"><PatientSearch /></div>
-
       {/* patient header spans the row */}
       <header className="2xl:col-span-3 xl:col-span-2">
         <p className="text-[13px] text-slate">{patient.age}-year-old {patient.sex.toLowerCase()}, {patient.city}, {patient.state}</p>
@@ -84,7 +78,7 @@ export function Workspace({ patient, initialRecord, initialNotes, loadMs }: {
           <span className="rounded-lg bg-accent-soft px-2.5 py-1 font-semibold text-accent-strong">{patient.primary_dx}</span>
           {stageText(patient) && <span className="rounded-lg bg-surface px-2.5 py-1 text-ink-2 ring-1 ring-line">{stageText(patient)}</span>}
           {patient.biomarkers && <span className="rounded-lg bg-surface px-2.5 py-1 text-ink-2 ring-1 ring-line">{patient.biomarkers}</span>}
-          <span className="rounded-lg bg-notes-soft px-2.5 py-1 font-mono text-[12px] text-notes" title="Patient id in Supabase">{patient.id}</span>
+          <span className="rounded-lg bg-notes-soft px-2.5 py-1 font-mono text-[12px] text-notes" title="This patient's notes namespace in turbopuffer">ts-patient-{patient.id}</span>
         </div>
       </header>
 
@@ -136,8 +130,7 @@ export function Workspace({ patient, initialRecord, initialNotes, loadMs }: {
             <div className="flex items-center gap-3">
               {saved && !dirty && (
                 <span className="inline-flex items-center gap-1.5 text-[12.5px] text-accent-strong">
-                  <Check size={14} />{saved.report.kind === "update" ? "Updated" : "Inserted"} in Postgres in {Math.round(saved.report.writeMs)} ms
-                  {indexed && <span className="text-slate">· {indexed}</span>}
+                  <Check size={14} />Saved in {(saved.report.writeMs / 1000).toFixed(2)} s, searchable {Math.round(saved.report.visibleMs)} ms later
                   <button type="button" onClick={() => setShowDetails((v) => !v)} aria-expanded={showDetails}
                     className="ml-1 font-semibold text-ink-2 underline underline-offset-2 hover:text-accent">
                     {showDetails ? "Hide details" : "Details"}
@@ -175,11 +168,11 @@ export function Workspace({ patient, initialRecord, initialNotes, loadMs }: {
           )}
         </div>
         {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
-        {saved && showDetails && !dirty && <SaveDetails report={saved.report} note={draft} index={index} />}
+        {saved && showDetails && !dirty && <SaveDetails report={saved.report} note={draft} patient={patient} savedAt={saved.at} />}
         </div>
       </section>
 
-      <Copilot patient={patient} />
+      <Copilot patient={patient} labs={initialRecord.latest.filter((o) => o.kind === "lab").map((o) => o.name)} />
     </div>
   );
 }

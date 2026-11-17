@@ -8,8 +8,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "setup-db": "node scripts/setup-db.mjs",
-    "migrate": "node scripts/migrate.mjs",
-    "setup-index-cron": "node scripts/setup-index-cron.mjs"
+    "migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.6.0",
