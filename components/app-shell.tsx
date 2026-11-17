@@ -178,7 +178,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
       </ul>
       <Account />
       <div className="border-t border-line px-5 py-3 text-[11.5px] leading-relaxed text-slate">
-        Patients and notes in Supabase Postgres.{" "}
+        Patient records in Supabase Postgres; notes, one namespace per patient, on turbopuffer.{" "}
         {corpus.pubmed && corpus.trials ? `${corpus.pubmed.rows.toLocaleString()} abstracts and ${corpus.trials.rows.toLocaleString()} trials on turbopuffer. ` : "Abstracts and trials on turbopuffer. "}
         Personal learning project. Synthetic patients, not for clinical use.
       </div>
