@@ -45,7 +45,7 @@ export async function POST(req: Request) {
   const targets: { namespace: string; filter: unknown[] | null }[] = [];
   if (sources.includes("pubmed")) targets.push({ namespace: NS.pubmed, filter: buildFilters("pubmed", f) });
   if (sources.includes("trials")) targets.push({ namespace: NS.trials, filter: buildFilters("trials", f, patient) });
-  if (!targets.length) return NextResponse.json({ error: "Pick abstracts, trials or both." }, { status: 400 });
+  if (!targets.length) return NextResponse.json({ error: "Pick abstracts or trials." }, { status: 400 });
 
   // One Langfuse trace per search (tagged "search"), with each namespace's turbopuffer call nested under it.
   after(flushLangfuse);
@@ -74,14 +74,14 @@ export async function POST(req: Request) {
 const ALL: Source[] = ["pubmed", "trials"];
 
 /**
- * The sources to search. Older links send `scope` instead: "literature", "trials" or "all"
+ * The source to search (one per search, so every rank is turbopuffer's own). Older links send `scope` instead: "literature", "trials" or "all"
  * (and "fulltext", from when full-text articles were searchable, which now means abstracts).
  */
 function parseSources(sources: unknown, scope?: string): Source[] {
   if (Array.isArray(sources)) {
     const picked = ALL.filter((s) => sources.includes(s));
-    return picked.length ? picked : ["pubmed", "trials"];
+    return [picked[0] ?? "pubmed"];
   }
   return ({ literature: ["pubmed"], fulltext: ["pubmed"], trials: ["trials"] } as Record<string, Source[]>)[scope ?? ""]
-    ?? ["pubmed", "trials"];
+    ?? ["pubmed"];
 }
