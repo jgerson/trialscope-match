@@ -20,8 +20,8 @@ function blank(author: string): Note {
   return { id: "", title: "", body: TEMPLATE, note_type: "Visit note", visit_date: new Date().toISOString().slice(0, 10), author };
 }
 
-export function Workspace({ patient, initialRecord, initialNotes, loadMs }: {
-  patient: Patient; initialRecord: PatientRecord; initialNotes: Note[]; loadMs: number;
+export function Workspace({ patient, initialRecord, initialNotes }: {
+  patient: Patient; initialRecord: PatientRecord; initialNotes: Note[];
 }) {
   const { readOnly } = useApp();
   const { user } = useUser();
@@ -106,7 +106,7 @@ export function Workspace({ patient, initialRecord, initialNotes, loadMs }: {
 
       {/* record and editor */}
       <section className="min-w-0 space-y-6">
-        <RecordPanel key={patient.id} initial={initialRecord} loadMs={loadMs} />
+        <RecordPanel key={patient.id} initial={initialRecord} />
         <div>
         <div className="mb-3 flex gap-2 2xl:hidden">
           <select value={selId} onChange={(e) => open(notes.find((n) => n.id === e.target.value) ?? null)} aria-label="Choose a note"

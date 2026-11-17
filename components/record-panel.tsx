@@ -3,7 +3,7 @@
 // in place. Every change is one Postgres insert or update; the panel then shows the record as the database returns it.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Database, Loader2, Pencil, Plus, X } from "lucide-react";
+import { Loader2, Pencil, Plus, X } from "lucide-react";
 import type { PatientRecord } from "@/lib/types";
 import { useApp } from "./app-shell";
 import { cx } from "./ui";
@@ -12,7 +12,7 @@ type Change = Record<string, unknown> & { op: string };
 const today = () => new Date().toISOString().slice(0, 10);
 const input = "rounded-lg border border-line bg-paper px-2.5 py-1.5 text-[13px] min-w-0";
 
-export function RecordPanel({ initial, loadMs }: { initial: PatientRecord; loadMs: number }) {
+export function RecordPanel({ initial }: { initial: PatientRecord }) {
   const { readOnly } = useApp();
   const router = useRouter();
   const [record, setRecord] = useState(initial);
@@ -21,9 +21,7 @@ export function RecordPanel({ initial, loadMs }: { initial: PatientRecord; loadM
   const [last, setLast] = useState<{ op: string; ms: number } | null>(null);
   const [open, setOpen] = useState<null | "patient" | "condition" | "medication" | "result">(null);
   const [showStopped, setShowStopped] = useState(false);
-  const [showQueries, setShowQueries] = useState(false);
   const p = record.patient;
-  const queryMs = Math.max(...record.queries.map((q) => q.ms), 0);
 
   const change = async (body: Change): Promise<boolean> => {
     if (readOnly || busy) return false;
@@ -52,13 +50,7 @@ export function RecordPanel({ initial, loadMs }: { initial: PatientRecord; loadM
     <section aria-labelledby="record-h" className="rounded-2xl border border-line bg-surface p-5 text-[13.5px]">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 id="record-h" className="text-[15px] font-semibold text-ink">Patient record</h2>
-        <button type="button" onClick={() => setShowQueries((v) => !v)} aria-expanded={showQueries} aria-controls="record-queries"
-          className="inline-flex items-center gap-1.5 rounded-md bg-paper px-2 py-0.5 font-mono text-[11.5px] text-slate ring-1 ring-line hover:text-ink-2 hover:ring-line-2">
-          <Database size={12} />Supabase · {record.queries.length} queries in parallel · {Math.round(queryMs)} ms (page {loadMs} ms)
-          <span className="font-sans font-semibold text-accent underline underline-offset-2">{showQueries ? "Hide SQL" : "Show SQL"}</span>
-        </button>
       </div>
-      {showQueries && <QueryList queries={record.queries} />}
       {last && <p className="mt-1 text-[12px] text-trials">Saved: {last.op.replace("-", " ")} in {last.ms} ms (one Postgres statement).</p>}
       {error && <p className="mt-2 text-[12.5px] text-red-700">{error}</p>}
 
@@ -250,29 +242,5 @@ function Form({ busy, onSubmit, onCancel, children }: { busy: boolean; onSubmit:
         </button>
       </div>
     </form>
-  );
-}
-
-// The statements behind the "Supabase" line: what each query was for, how long it took and the SQL Postgres received.
-function QueryList({ queries }: { queries: PatientRecord["queries"] }) {
-  return (
-    <div id="record-queries" className="mt-3 space-y-3 rounded-xl bg-paper/60 p-3 ring-1 ring-line">
-      {queries.map((q) => (
-        <div key={q.label}>
-          <p className="flex flex-wrap items-baseline gap-x-2 text-[12.5px]">
-            <span className="font-mono font-medium text-ink-2">{q.label}</span>
-            <span className="tabular-nums text-slate">{q.ms < 10 ? q.ms.toFixed(1) : Math.round(q.ms)} ms · {q.rows} {q.rows === 1 ? "row" : "rows"}</span>
-          </p>
-          {q.sql
-            ? <pre className="mt-1 overflow-x-auto rounded-lg bg-surface p-2.5 font-mono text-[11.5px] leading-relaxed text-ink-2 ring-1 ring-line">{q.sql}</pre>
-            : <p className="mt-1 text-[12px] text-slate">Statement not available.</p>}
-        </div>
-      ))}
-      <p className="text-[12px] leading-relaxed text-slate">
-        The SQL as Postgres received it. <code className="font-mono">$1</code> is this patient&apos;s id, sent separately
-        from the statement. The four run at the same time on separate pooled connections, so the panel&apos;s time is the
-        slowest of them; each time includes the round trip to Supabase.
-      </p>
-    </div>
   );
 }

@@ -35,8 +35,9 @@ const SUGGESTIONS = (p: Patient, labs: string[]) => {
   return [
     `Is there a recruiting trial ${p.name.split(" ")[0]} might qualify for?`,
     "Is any current medication or lab value likely to exclude them from trials?",
-    lab ? `How has ${lab} changed over time?` : "Summarize this patient's course so far.",
-  ];
+    lab ? `How has ${lab} changed over time?` : null,
+    "Summarize this patient's course so far.",
+  ].filter((s): s is string => s != null);
 };
 
 /** labs: the names of this patient's labs (from their record), for the suggested questions. */

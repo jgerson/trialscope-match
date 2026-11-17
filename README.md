@@ -52,8 +52,7 @@ are read only (plus cache-warm hints), writes go only to `ts-patient-<id>` names
 
 Every Postgres query that serves a page, a search or an edit is logged as `{"postgres":"<label>","ms":…,"rows":…}` in
 the runtime logs (small housekeeping reads, like the trial-rules cache and the filter suggestions, aren't), next to the existing
-`{"tpuf":…}` lines, and the UI says which database answered: the record panel shows its query count and time (and,
-with **Show SQL**, each statement), candidate patients say which store did what and how long it took, and each copilot step carries a Supabase, turbopuffer or ClinicalTrials.gov label.
+`{"tpuf":…}` lines, and the UI says which database answered: candidate patients say which store did what and how long it took, and each copilot step carries a Supabase, turbopuffer or ClinicalTrials.gov label.
 
 ## Setup
 
@@ -275,7 +274,7 @@ show up in both apps.
   request, query plan and consistency) is hidden from the page for now; `RunOverview` in `components/explain.tsx`
   still has it, and every search's request and timings are in Langfuse.
 - **Patient workspace** (`/patients/[id]`): the record panel, the notes list and a markdown editor with read and edit
-  modes, and the copilot. The record (Supabase) and the notes (turbopuffer) load in parallel; **Show SQL** on the record panel lists each query with its time, row count and statement.
+  modes, and the copilot. The record (Supabase) and the notes (turbopuffer) load in parallel. The copilot suggests four questions: a recruiting trial, what might exclude the patient, how one of their own labs has changed, and a summary of their course.
 - **Copilot**: Claude with five tools (above). Answers stream in, each tool call is listed as it happens with the
   database it hit, and `[N1]`, `[P1]`, `[T1]` tags open source cards; `[R]` and `[H]` tags point at record rows listed
   in the step.
