@@ -65,13 +65,15 @@ export async function tpCall<T>(op: TpufOp, namespace: string, request: Record<s
   // The ts-* namespaces belong to the original TrialScope app: this app only reads ts-trials and ts-pubmed (and may send
   // them a cache-warm hint, which changes no data). It writes only to its own match-notes. Anything else is refused
   // before a request is made.
-  if (op === "write" && !WRITABLE.has(namespace)) {
+  // Patient notes (ts-patient-<id>) are shared with the original TrialScope apps: read, written and warmed here too.
+  const patientNs = namespace.startsWith(NS.patientPrefix) && namespace.length > NS.patientPrefix.length;
+  if (op === "write" && !WRITABLE.has(namespace) && !patientNs) {
     throw new Error(`turbopuffer writes are only allowed to ${[...WRITABLE].join(", ")} (refused write on ${namespace})`);
   }
-  if (op === "warm" && !WARMABLE.has(namespace)) {
+  if (op === "warm" && !WARMABLE.has(namespace) && !patientNs) {
     throw new Error(`turbopuffer cache-warm hints are only allowed to ${[...WARMABLE].join(", ")} (refused on ${namespace})`);
   }
-  if (!READABLE.has(namespace)) throw new Error(`turbopuffer namespace ${namespace} is not used by this app`);
+  if (!READABLE.has(namespace) && !patientNs) throw new Error(`turbopuffer namespace ${namespace} is not used by this app`);
   const logged = loggable(op, request);
   const exec = async (observe?: (u: Record<string, unknown>) => void): Promise<T> => {
     const t0 = performance.now();

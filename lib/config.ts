@@ -48,6 +48,9 @@ export const NS = {
   trials: "ts-trials",
   pubmed: "ts-pubmed",
   notes: "match-notes",
+  // Each patient's notes, shared with the original TrialScope apps (same namespace, same schema), read and written here.
+  patient: (id: string) => `ts-patient-${id}`,
+  patientPrefix: "ts-patient-",
 };
 
 export const RRF_K = 60;
