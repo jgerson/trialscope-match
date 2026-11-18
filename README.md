@@ -188,7 +188,7 @@ Inside these traces you can also find:
 
 - **Network spans.** Every outgoing HTTP call (turbopuffer, the model through AI Gateway or Anthropic, ClinicalTrials.gov)
   is an `http <METHOD> <host>` span under the step that made it, with path, status, time to response headers and
-  sizes. Retries show as separate spans. For turbopuffer reads the span also has the full URL and the JSON request body, so it is the exact API call (paste it into curl with your own key); write bodies are left out, since their rows can hold patient notes. Headers, query strings, response bodies and request bodies to any other host (model prompts carry patient text) are never recorded. This is a custom `fetch`
+  sizes. Retries show as separate spans. For turbopuffer reads the span also has the full URL, the JSON request body and the JSON response body, so one span shows the exact API call (paste it into curl with your own key) and what came back. In the response, long strings are cut to 300 characters and, for a patient's notes namespace, the note text (`title`, `body`, `text`) is left out; ids, scores, note types, dates, `performance` and `billing` stay. Write bodies are left out both ways, since their rows can hold patient notes. Headers, query strings, and request and response bodies to any other host (model prompts carry patient text) are never recorded. This is a custom `fetch`
   passed to the SDK clients (`lib/traced-fetch.ts`), so trace names and structure stay the same; outside a trace it's plain `fetch`.
 - **Server-side embedding.** With native embedding, turbopuffer embeds the query with voyage-4-lite on its own
   servers inside the same HTTP call, so there's no separate request to see. When turbopuffer reports the time it took
